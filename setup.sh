@@ -17,7 +17,7 @@ fi
 if [ ! -d ".venv" ]
 then
     echo "Creating UV virtual environment..."
-    uv venv
+    uv venv -p 3.11
 fi
 
  echo "Activating virtual environment..."
