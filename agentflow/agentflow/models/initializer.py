@@ -6,6 +6,62 @@ import traceback
 from typing import Dict, Any, List, Tuple
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
+
+def _get_optimal_workers(max_workers: int = None) -> tuple[int, str]:
+    """
+    Intelligently determine optimal number of worker threads based on:
+    1. External parallelism (GNU parallel, SLURM, etc.)
+    2. Available CPU cores
+    3. User-specified max_workers
+
+    Returns:
+        (optimal_workers, reason): Number of workers and explanation
+    """
+    cpu_count = multiprocessing.cpu_count()
+
+    # Check for GNU parallel environment
+    parallel_seq = os.environ.get('PARALLEL_SEQ')
+    parallel_jobslot = os.environ.get('PARALLEL_JOBSLOT')
+
+    # Check for SLURM scheduler
+    slurm_ntasks = os.environ.get('SLURM_NTASKS')
+    slurm_cpus_per_task = os.environ.get('SLURM_CPUS_PER_TASK')
+
+    external_parallelism = None
+    detection_method = None
+
+    # Detect external parallelism
+    if parallel_seq or parallel_jobslot:
+        # GNU parallel is running
+        # Estimate: typically parallel -j N means N parallel jobs
+        # Conservative estimate: assume N = cpu_count / 2
+        external_parallelism = max(cpu_count // 2, 1)
+        detection_method = "GNU parallel"
+    elif slurm_ntasks:
+        try:
+            external_parallelism = int(slurm_ntasks)
+            detection_method = "SLURM"
+        except:
+            pass
+
+    # Calculate optimal workers
+    if max_workers is not None:
+        # User explicitly specified max_workers
+        optimal = max_workers
+        reason = f"user-specified: {max_workers} workers"
+    elif external_parallelism:
+        # External parallelism detected
+        # Formula: optimal = max(1, cpu_count / external_parallelism)
+        # But cap at 4 to avoid too few workers
+        optimal = max(1, min(4, cpu_count // external_parallelism))
+        reason = f"{detection_method} detected, auto-adjusted to {optimal} workers (CPU={cpu_count}, external_jobs≈{external_parallelism})"
+    else:
+        # No external parallelism, use moderate default
+        optimal = min(4, max(2, cpu_count // 4))
+        reason = f"standalone mode: {optimal} workers (CPU={cpu_count})"
+
+    return optimal, reason
 
 class Initializer:
     def __init__(self,
@@ -17,9 +73,9 @@ class Initializer:
     base_url: str = None,
     check_model: bool = True,
     parallel_loading: bool = True,
-    max_workers: int = 4):
+    max_workers: int = None):
         """
-        Initialize the tool initializer.
+        Initialize the tool initializer with intelligent parallel loading.
 
         Args:
             enabled_tools: List of tool names to enable
@@ -30,7 +86,10 @@ class Initializer:
             base_url: Base URL for API
             check_model: Whether to check model availability
             parallel_loading: Whether to load tools in parallel (default: True)
-            max_workers: Maximum number of parallel workers (default: 4)
+            max_workers: Maximum number of parallel workers (default: None for auto-detect)
+                        If None, will intelligently detect based on:
+                        - External parallelism (GNU parallel, SLURM, etc.)
+                        - Available CPU cores
         """
         self.toolbox_metadata = {}
         self.available_tools = []
@@ -44,7 +103,10 @@ class Initializer:
         self.base_url = base_url
         self.check_model = check_model
         self.parallel_loading = parallel_loading
-        self.max_workers = max_workers
+
+        # Intelligently determine optimal workers
+        optimal_workers, worker_reason = _get_optimal_workers(max_workers)
+        self.max_workers = optimal_workers
 
         # Add tool instance cache - stores instantiated tools with their engines
         self.tool_instances_cache = {}
@@ -52,7 +114,7 @@ class Initializer:
         print("\n==> Initializing agentflow...")
         print(f"Enabled tools: {self.enabled_tools} with {self.tool_engine}")
         print(f"LLM engine name: {self.model_string}")
-        print(f"Parallel loading: {self.parallel_loading} (max_workers={self.max_workers})")
+        print(f"Parallel loading: {self.parallel_loading} ({worker_reason})")
         self._set_up_tools()
         
         # if vllm, set up the vllm server
