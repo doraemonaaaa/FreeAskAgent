@@ -5,6 +5,7 @@ import inspect
 import traceback
 from typing import Dict, Any, List, Tuple
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class Initializer:
     def __init__(self,
@@ -14,8 +15,23 @@ class Initializer:
     verbose: bool = False,
     vllm_config_path: str = None,
     base_url: str = None,
-    check_model: bool = True):
+    check_model: bool = True,
+    parallel_loading: bool = True,
+    max_workers: int = 4):
+        """
+        Initialize the tool initializer.
 
+        Args:
+            enabled_tools: List of tool names to enable
+            tool_engine: List of engine names corresponding to each tool
+            model_string: Default model string
+            verbose: Whether to print verbose output
+            vllm_config_path: Path to vllm config
+            base_url: Base URL for API
+            check_model: Whether to check model availability
+            parallel_loading: Whether to load tools in parallel (default: True)
+            max_workers: Maximum number of parallel workers (default: 4)
+        """
         self.toolbox_metadata = {}
         self.available_tools = []
         self.enabled_tools = enabled_tools
@@ -27,6 +43,8 @@ class Initializer:
         self.vllm_config_path = vllm_config_path
         self.base_url = base_url
         self.check_model = check_model
+        self.parallel_loading = parallel_loading
+        self.max_workers = max_workers
 
         # Add tool instance cache - stores instantiated tools with their engines
         self.tool_instances_cache = {}
@@ -34,6 +52,7 @@ class Initializer:
         print("\n==> Initializing agentflow...")
         print(f"Enabled tools: {self.enabled_tools} with {self.tool_engine}")
         print(f"LLM engine name: {self.model_string}")
+        print(f"Parallel loading: {self.parallel_loading} (max_workers={self.max_workers})")
         self._set_up_tools()
         
         # if vllm, set up the vllm server
@@ -98,14 +117,96 @@ class Initializer:
 
         return {"short_to_long": short_to_long, "long_to_internal": long_to_internal}
 
-    def load_tools_and_get_metadata(self) -> Dict[str, Any]:
-        # Implementation of load_tools_and_get_metadata function
-        print("Loading tools and getting metadata...")
+    def _load_single_tool(self, root: str, import_path: str, agentflow_dir: str) -> Dict[str, Any]:
+        """
+        Load a single tool and return its metadata.
+        This method is designed to be called in parallel.
+
+        Returns:
+            Dict with tool metadata or None if loading failed
+        """
+        result = {'metadata': None, 'instance': None, 'error': None}
+
+        try:
+            module = importlib.import_module(import_path)
+            for name, obj in inspect.getmembers(module):
+                if inspect.isclass(obj) and name.endswith('Tool') and name != 'BaseTool':
+                    try:
+                        # Check if the tool requires specific llm engine
+                        tool_index = -1
+                        current_dir_name = os.path.basename(root)
+                        for i, tool_name in enumerate(self.enabled_tools):
+                            # First check short_to_long mapping
+                            if hasattr(self, 'tool_name_mapping'):
+                                short_to_long = self.tool_name_mapping.get('short_to_long', {})
+                                long_to_internal = self.tool_name_mapping.get('long_to_internal', {})
+
+                                # If input is short name, convert to long name
+                                long_name = short_to_long.get(tool_name, tool_name)
+
+                                # Check if long name matches this directory
+                                if long_name in long_to_internal:
+                                    if long_to_internal[long_name]["dir_name"] == current_dir_name:
+                                        tool_index = i
+                                        break
+
+                            # Fallback to original behavior
+                            if tool_name.lower().replace('_tool', '') == current_dir_name:
+                                tool_index = i
+                                break
+
+                        if tool_index >= 0 and tool_index < len(self.tool_engine):
+                            engine = self.tool_engine[tool_index]
+                            if engine == "Default":
+                                tool_instance = obj()
+                            elif engine == "self":
+                                tool_instance = obj(model_string=self.model_string)
+                            else:
+                                tool_instance = obj(model_string=engine)
+                        else:
+                            tool_instance = obj()
+
+                        # Use the external tool name (from TOOL_NAME) as the key
+                        metadata_key = getattr(tool_instance, 'tool_name', name)
+
+                        metadata = {
+                            'tool_name': getattr(tool_instance, 'tool_name', 'Unknown'),
+                            'tool_description': getattr(tool_instance, 'tool_description', 'No description'),
+                            'tool_version': getattr(tool_instance, 'tool_version', 'Unknown'),
+                            'input_types': getattr(tool_instance, 'input_types', {}),
+                            'output_type': getattr(tool_instance, 'output_type', 'Unknown'),
+                            'demo_commands': getattr(tool_instance, 'demo_commands', []),
+                            'user_metadata': getattr(tool_instance, 'user_metadata', {}),
+                            'require_llm_engine': getattr(obj, 'require_llm_engine', False),
+                        }
+
+                        result['metadata'] = (metadata_key, metadata)
+                        result['instance'] = (metadata_key, tool_instance)
+                        return result
+
+                    except Exception as e:
+                        result['error'] = f"Error instantiating {name}: {str(e)}"
+                        return result
+
+        except Exception as e:
+            result['error'] = f"Error loading module {import_path}: {str(e)}"
+
+        return result
+
+    def load_tools_and_get_metadata(self, parallel: bool = True, max_workers: int = 4) -> Dict[str, Any]:
+        """
+        Load tools and get metadata. Can be done in parallel for faster initialization.
+
+        Args:
+            parallel: If True, load tools in parallel using ThreadPoolExecutor
+            max_workers: Maximum number of worker threads (default: 4)
+        """
+        print(f"Loading tools and getting metadata... (parallel={parallel}, max_workers={max_workers})")
+        start_time = time.time()
+
         self.toolbox_metadata = {}
         agentflow_dir = self.get_project_root()
         tools_dir = os.path.join(agentflow_dir, 'tools')
-        # print(f"agentflow directory: {agentflow_dir}")
-        # print(f"Tools directory: {tools_dir}")
 
         # Add the agentflow directory and its parent to the Python path
         sys.path.insert(0, agentflow_dir)
@@ -122,80 +223,68 @@ class Initializer:
         print(f"\n==> Tool name mapping (short to long): {self.tool_name_mapping.get('short_to_long', {})}")
         print(f"==> Tool name mapping (long to internal): {self.tool_name_mapping.get('long_to_internal', {})}")
 
+        # Collect all tool directories to process
+        tool_dirs_to_process = []
         for root, dirs, files in os.walk(tools_dir):
-            # print(f"\nScanning directory: {root}")
             if 'tool.py' in files and (self.load_all or os.path.basename(root) in self.available_tools):
                 file = 'tool.py'
                 module_path = os.path.join(root, file)
-                module_name = os.path.splitext(file)[0]
                 relative_path = os.path.relpath(module_path, agentflow_dir)
                 import_path = '.'.join(os.path.split(relative_path)).replace(os.sep, '.')[:-3]
+                tool_dirs_to_process.append((root, import_path))
 
+        if parallel and len(tool_dirs_to_process) > 1:
+            # Parallel loading
+            print(f"\n==> Loading {len(tool_dirs_to_process)} tools in parallel...")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit all tool loading tasks
+                future_to_path = {
+                    executor.submit(self._load_single_tool, root, import_path, agentflow_dir): import_path
+                    for root, import_path in tool_dirs_to_process
+                }
+
+                # Process results as they complete
+                for future in as_completed(future_to_path):
+                    import_path = future_to_path[future]
+                    try:
+                        result = future.result()
+                        if result['error']:
+                            print(f"Error loading {import_path}: {result['error']}")
+                        elif result['metadata'] and result['instance']:
+                            metadata_key, metadata = result['metadata']
+                            instance_key, instance = result['instance']
+
+                            # Cache the tool instance
+                            self.tool_instances_cache[instance_key] = instance
+                            print(f"✓ Loaded: {metadata_key} with engine: {getattr(instance, 'model_string', 'default')}")
+
+                            # Store metadata
+                            self.toolbox_metadata[metadata_key] = metadata
+                    except Exception as e:
+                        print(f"Exception loading {import_path}: {str(e)}")
+        else:
+            # Serial loading (original behavior)
+            print(f"\n==> Loading {len(tool_dirs_to_process)} tools serially...")
+            for root, import_path in tool_dirs_to_process:
                 print(f"\n==> Attempting to import: {import_path}")
-                try:
-                    module = importlib.import_module(import_path)
-                    for name, obj in inspect.getmembers(module):
-                        if inspect.isclass(obj) and name.endswith('Tool') and name != 'BaseTool':
-                            print(f"Found tool class: {name}")
-                            try:
-                                # Check if the tool requires specific llm engine
-                                tool_index = -1
-                                current_dir_name = os.path.basename(root)
-                                for i, tool_name in enumerate(self.enabled_tools):
-                                    # First check short_to_long mapping
-                                    if hasattr(self, 'tool_name_mapping'):
-                                        short_to_long = self.tool_name_mapping.get('short_to_long', {})
-                                        long_to_internal = self.tool_name_mapping.get('long_to_internal', {})
+                result = self._load_single_tool(root, import_path, agentflow_dir)
 
-                                        # If input is short name, convert to long name
-                                        long_name = short_to_long.get(tool_name, tool_name)
+                if result['error']:
+                    print(f"Error: {result['error']}")
+                elif result['metadata'] and result['instance']:
+                    metadata_key, metadata = result['metadata']
+                    instance_key, instance = result['instance']
 
-                                        # Check if long name matches this directory
-                                        if long_name in long_to_internal:
-                                            if long_to_internal[long_name]["dir_name"] == current_dir_name:
-                                                tool_index = i
-                                                break
+                    # Cache the tool instance
+                    self.tool_instances_cache[instance_key] = instance
+                    print(f"Cached tool instance: {metadata_key} with engine: {getattr(instance, 'model_string', 'default')}")
 
-                                    # Fallback to original behavior
-                                    if tool_name.lower().replace('_tool', '') == current_dir_name:
-                                        tool_index = i
-                                        break
+                    # Store metadata
+                    self.toolbox_metadata[metadata_key] = metadata
+                    print(f"Metadata for {metadata_key}: {self.toolbox_metadata[metadata_key]}")
 
-                                if tool_index >= 0 and tool_index < len(self.tool_engine):
-                                    engine = self.tool_engine[tool_index]
-                                    if engine == "Default":
-                                        tool_instance = obj()
-                                    elif engine == "self":
-                                        tool_instance = obj(model_string=self.model_string)
-                                    else:
-                                        tool_instance = obj(model_string=engine)
-                                else:
-                                    tool_instance = obj()
-
-                                # Use the external tool name (from TOOL_NAME) as the key
-                                metadata_key = getattr(tool_instance, 'tool_name', name)
-
-                                # Cache the tool instance for later use
-                                self.tool_instances_cache[metadata_key] = tool_instance
-                                print(f"Cached tool instance: {metadata_key} with engine: {getattr(tool_instance, 'model_string', 'default')}")
-
-                                self.toolbox_metadata[metadata_key] = {
-                                    'tool_name': getattr(tool_instance, 'tool_name', 'Unknown'),
-                                    'tool_description': getattr(tool_instance, 'tool_description', 'No description'),
-                                    'tool_version': getattr(tool_instance, 'tool_version', 'Unknown'),
-                                    'input_types': getattr(tool_instance, 'input_types', {}),
-                                    'output_type': getattr(tool_instance, 'output_type', 'Unknown'),
-                                    'demo_commands': getattr(tool_instance, 'demo_commands', []),
-                                    'user_metadata': getattr(tool_instance, 'user_metadata', {}), # This is a placeholder for user-defined metadata
-                                    'require_llm_engine': getattr(obj, 'require_llm_engine', False),
-                                }
-                                print(f"Metadata for {metadata_key}: {self.toolbox_metadata[metadata_key]}")
-                            except Exception as e:
-                                print(f"Error instantiating {name}: {str(e)}")
-                except Exception as e:
-                    print(f"Error loading module {module_name}: {str(e)}")
-                    
-        print(f"\n==> Total number of tools imported: {len(self.toolbox_metadata)}")
+        elapsed_time = time.time() - start_time
+        print(f"\n==> Total number of tools imported: {len(self.toolbox_metadata)} (took {elapsed_time:.2f}s)")
 
         return self.toolbox_metadata
 
@@ -274,8 +363,11 @@ class Initializer:
 
         self.available_tools = mapped_tools
 
-        # Now load tools and get metadata
-        self.load_tools_and_get_metadata()
+        # Now load tools and get metadata (with optional parallel loading)
+        self.load_tools_and_get_metadata(
+            parallel=self.parallel_loading,
+            max_workers=self.max_workers
+        )
 
         # Run demo commands to determine available tools
         # This will update self.available_tools to contain external names
@@ -287,13 +379,49 @@ class Initializer:
         print(f"✅ Final available tools: {self.available_tools}")
 
 if __name__ == "__main__":
-    enabled_tools = ["Base_Generator_Tool", "Python_Coder_Tool"]
-    tool_engine = ["Default", "Default"]
-    initializer = Initializer(enabled_tools=enabled_tools,tool_engine=tool_engine)
+    import time
 
-    print("\nAvailable tools:")
-    print(initializer.available_tools)
+    enabled_tools = ["Base_Generator_Tool", "Python_Coder_Tool", "Google_Search_Tool", "Wikipedia_Search_Tool"]
+    tool_engine = ["dashscope", "dashscope", "Default", "Default"]
 
-    print("\nToolbox metadata for available tools:")
-    print(initializer.toolbox_metadata)
+    print("\n" + "="*80)
+    print("PERFORMANCE COMPARISON: Serial vs Parallel Tool Loading")
+    print("="*80)
+
+    # Test 1: Serial loading
+    print("\n[Test 1] Serial Loading...")
+    print("-"*80)
+    start = time.time()
+    init_serial = Initializer(
+        enabled_tools=enabled_tools,
+        tool_engine=tool_engine,
+        parallel_loading=False  # Serial
+    )
+    serial_time = time.time() - start
+    print(f"\n✓ Serial loading completed in {serial_time:.2f}s")
+    print(f"  Tools loaded: {len(init_serial.available_tools)}")
+
+    # Test 2: Parallel loading (4 workers)
+    print("\n[Test 2] Parallel Loading (4 workers)...")
+    print("-"*80)
+    start = time.time()
+    init_parallel = Initializer(
+        enabled_tools=enabled_tools,
+        tool_engine=tool_engine,
+        parallel_loading=True,  # Parallel
+        max_workers=4
+    )
+    parallel_time = time.time() - start
+    print(f"\n✓ Parallel loading completed in {parallel_time:.2f}s")
+    print(f"  Tools loaded: {len(init_parallel.available_tools)}")
+
+    # Summary
+    print("\n" + "="*80)
+    print("PERFORMANCE SUMMARY")
+    print("="*80)
+    print(f"Serial loading:   {serial_time:>6.2f}s")
+    print(f"Parallel loading: {parallel_time:>6.2f}s (4 workers)")
+    print(f"Speedup:          {serial_time/parallel_time:>6.2f}x")
+    print(f"Time saved:       {serial_time - parallel_time:>6.2f}s")
+    print("="*80)
     

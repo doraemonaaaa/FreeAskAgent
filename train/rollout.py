@@ -41,6 +41,7 @@ class AgentFlowRollout:
         llm_engine_name: str = "gpt-4o",
         enabled_tools: list[str] = ["Base_Generator_Tool"],
         tool_engine: list[str] = ["Default"],
+        model_engine: list[str] = ["trainable", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
         output_types: str = "final,direct",
         max_steps: int = 3,
         max_time: int = 500,
@@ -58,6 +59,7 @@ class AgentFlowRollout:
             llm_engine_name=prefix + llm_engine_name,
             enabled_tools=enabled_tools,
             tool_engine=tool_engine,
+            model_engine=model_engine,
             output_types=output_types,
             max_steps=max_steps,
             max_time=max_time,
@@ -91,6 +93,7 @@ def get_agent(
     tools: list[str],
     max_steps: int,
     tool_engine: str,
+    model_engine: list[str],
     max_tokens: int,
     output_type: str,
     timeout: int,
@@ -108,6 +111,7 @@ def get_agent(
         llm_engine_name=llm_engine_name,
         enabled_tools=tools,
         tool_engine=tool_engine,
+        model_engine=model_engine,
         max_steps=max_steps,
         max_tokens=max_tokens,
         base_url=vllm_base_url,
@@ -128,12 +132,13 @@ class Rollout(LitAgent):
     batch_size: int = 16,
     enabled_tools: list[str] =["Base_Generator_Tool","Python_Coder_Tool","Google_Search_Tool","Wikipedia_Search_Tool"],
     tool_engine: list[str] = ["dashscope","dashscope","Default","Default"],
+    model_engine: list[str] = ["trainable", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
     max_steps: int = 3,
     max_tokens: int = 2048,
     train_temperature: float = 0.7,
     test_temperature: float = 0.0,
     output_type: str = "direct",
-    timeout: int = 300, 
+    timeout: int = 300,
     ):
         super().__init__()
         self.server_public_ip=server_public_ip
@@ -155,11 +160,12 @@ class Rollout(LitAgent):
         self.test_temperature=test_temperature
 
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.base_rollout_dir = f"./rollout_data/{self.server_public_ip}/{exp_name}_{timestamp}" 
+        self.base_rollout_dir = f"./rollout_data/{self.server_public_ip}/{exp_name}_{timestamp}"
         self.tools = enabled_tools
         self.tool_engine = tool_engine
+        self.model_engine = model_engine
         self._solve_call_count = 0
-        
+
         self.run_info_file = os.path.join(self.base_rollout_dir, ".run_info")
         self.init_lock_file = os.path.join(self.base_rollout_dir, ".init.lock")
 
@@ -289,6 +295,7 @@ class Rollout(LitAgent):
                 tools = self.tools,
                 max_steps = self.max_steps,
                 tool_engine = self.tool_engine,
+                model_engine = self.model_engine,
                 resources = resources,
                 max_tokens = self.max_tokens,
                 output_type= self.output_type,
@@ -335,6 +342,7 @@ class Rollout(LitAgent):
                     tools = self.tools,
                     max_steps = self.max_steps,
                     tool_engine = self.tool_engine,
+                    model_engine = self.model_engine,
                     resources = resources,
                     max_tokens = self.max_tokens,
                     output_type=self.output_type,
@@ -367,6 +375,7 @@ if __name__ == "__main__":
         'N_WORKERS',
         'ENABLE_TOOLS',
         'TOOL_ENGINE',
+        'MODEL_ENGINE',
         "TOOL_STEPS",
         "TRAIN_TEMPERATURE",
         "TEST_TEMPERATURE",
@@ -387,12 +396,13 @@ if __name__ == "__main__":
         "N_WORKERS": "n_workers",
         "ENABLE_TOOLS": "enabled_tools",
         "TOOL_ENGINE": "tool_engine",
+        "MODEL_ENGINE": "model_engine",
         "TOOL_STEPS": "max_steps",
         "TRAIN_TEMPERATURE": "train_temperature",
         "TEST_TEMPERATURE": "test_temperature",
         "data.max_response_length": "max_tokens",
         "OUTPUT_TYPE": "output_type",
-        "AGENT_MAX_TIMEOUT": "timeout", 
+        "AGENT_MAX_TIMEOUT": "timeout",
     }
 
     config_dict = dict(zip(config_keys_map.values(), values))

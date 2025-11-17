@@ -195,6 +195,7 @@ class Solver:
 def construct_solver(llm_engine_name : str = "gpt-4o",
                      enabled_tools : list[str] = ["all"],
                      tool_engine: list[str] = ["Default"],
+                     model_engine: list[str] = ["trainable", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
                      output_types : str = "final,direct",
                      max_steps : int = 10,
                      max_time : int = 300,
@@ -205,7 +206,14 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
                      base_url : str = None,
                      temperature: float = 0.0
                      ):
-    
+
+    # Parse model_engine configuration
+    # Format: [planner_main, planner_fixed, executor]
+    # "trainable" means use llm_engine_name (the trainable model)
+    planner_main_engine = llm_engine_name if model_engine[0] == "trainable" else model_engine[0]
+    planner_fixed_engine = llm_engine_name if model_engine[1] == "trainable" else model_engine[1]
+    executor_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
+
     # Instantiate Initializer
     initializer = Initializer(
         enabled_tools=enabled_tools,
@@ -217,7 +225,8 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
 
     # Instantiate Planner
     planner = Planner(
-        llm_engine_name=llm_engine_name,
+        llm_engine_name=planner_main_engine,
+        llm_engine_fixed_name=planner_fixed_engine,
         toolbox_metadata=initializer.toolbox_metadata,
         available_tools=initializer.available_tools,
         verbose=verbose,
@@ -230,11 +239,10 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
 
     # Instantiate Executor with tool instances cache
     executor = Executor(
-        # llm_engine_name=llm_engine_name,
-        llm_engine_name="dashscope",
+        llm_engine_name=executor_engine,
         root_cache_dir=root_cache_dir,
         verbose=verbose,
-        # base_url=base_url,
+        base_url=base_url if executor_engine == llm_engine_name else None,  # Only use base_url for trainable model
         temperature=temperature,
         tool_instances_cache=initializer.tool_instances_cache  # Pass the cached tool instances
     )
