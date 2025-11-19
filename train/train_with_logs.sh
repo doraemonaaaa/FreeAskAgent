@@ -24,7 +24,21 @@ LOG_SIZE='1M'
 # 4. Define the maximum number of log files to keep (mimics backupCount behavior)
 MAX_LOG_FILES=5000
 
-# 5. The Python command you want to run (enclosed in quotes)
+# 5. Read CUDA_VISIBLE_DEVICES from config.yaml if available
+if [ -f "train/config.yaml" ]; then
+    CUDA_DEVICES=$(grep -m1 "CUDA_VISIBLE_DEVICES:" train/config.yaml | sed "s/.*CUDA_VISIBLE_DEVICES: *['\"]\\([^'\"]*\\)['\"].*/\\1/")
+    if [ -n "$CUDA_DEVICES" ]; then
+        export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
+        echo "Setting CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES from config.yaml"
+
+        # Restart Ray to apply GPU settings
+        echo "Restarting Ray to apply GPU settings..."
+        ray stop -v --force --grace-period 60 2>/dev/null || true
+        env RAY_DEBUG=legacy HYDRA_FULL_ERROR=1 VLLM_USE_V1=1 CUDA_VISIBLE_DEVICES="$CUDA_DEVICES" ray start --head --dashboard-host=0.0.0.0
+    fi
+fi
+
+# 6. The Python command you want to run (enclosed in quotes)
 PYTHON_COMMAND="python train/train_agent.py"
 # Or a more complex command, for example:
 # PYTHON_COMMAND="python -m agentflow.verl algorithm.adv_estimator=grpo data.train_batch_size=8"
