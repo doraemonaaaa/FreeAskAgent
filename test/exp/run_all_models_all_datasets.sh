@@ -18,8 +18,8 @@ THREADS=20
 
 # Define all tasks to run
 TASKS=(
-    "gameof24"
-    # "aime24"
+    # "gameof24"
+    "aime24"
     # "amc23"
     # "bamboogle"
     # "2wiki"
@@ -41,7 +41,7 @@ TASKS=(
 MODELS=(
     "8000:vllm-AgentFlow/agentflow-planner-7b,AgentFlow-7B,\
 Base_Generator_Tool|Python_Coder_Tool|Google_Search_Tool|Wikipedia_Search_Tool,\
-dashscope-qwen2.5-7b-instruct|dashscope-qwen2.5-7b-instruct|Default|Default,\
+gpt-4o-mini|dashscope-qwen2.5-7b-coder-instruct|Default|Default,\
 trainable|dashscope|dashscope"
 #     ":dashscope-qwen2.5-7b-instruct,AgentFlow-7B,\
 # Base_Generator_Tool|Python_Coder_Tool|Google_Search_Tool|Wikipedia_Search_Tool,\
