@@ -3,7 +3,8 @@
 # Ensure script exits on error
 set -e
 
-echo "Running in directory: $(pwd)"
+# Switch to project root directory
+# cd YOUR_ROOT_PATH
 
 # Install UV (if not already installed)
 if ! command -v uv &> /dev/null
@@ -12,29 +13,32 @@ then
     pip install uv
 fi
 
-# Create UV virtual environment IN THIS DIRECTORY
+# Create and activate UV virtual environment
 if [ ! -d ".venv" ]
 then
-    echo "Creating UV virtual environment in FreeAskAgent..."
-    uv venv -p 3.11 .venv
+    echo "Creating UV virtual environment..."
+    uv venv -p 3.11
 fi
 
-echo "Activating virtual environment..."
+ echo "Activating virtual environment..."
 source .venv/bin/activate
-echo "Python path: $(which python)"
 
-# ---- Install dependencies for internal package ----
 cd agentflow
 uv pip install -r requirements.txt
 uv pip install --no-deps -e .
 cd ..
 
-# ---- Install project-level dependencies ----
+# Install project dependencies (development mode)
 echo "Installing project dependencies (development mode)..."
 uv pip install -e .
 
+# uv pip install omegaconf
+# uv pip install codetiming
+# uv pip install pyvers multiprocess
 uv pip install dashscope
 uv pip install fire
+
+# Install additional dependency packages
 
 echo "Installing AutoGen..."
 uv pip install "autogen-agentchat" "autogen-ext[openai]"
@@ -54,21 +58,20 @@ uv pip install langgraph "langchain[openai]" langchain-community langchain-text-
 echo "Installing SQL related dependencies..."
 uv pip install sqlparse nltk
 
-# ---- GPU setup ----
 bash scripts/setup_stable_gpu.sh
 
-# Remove old verl folder
 rm -rf verl
 
-# ---- Restart Ray ----
+# Restart Ray service
 echo "Restarting Ray service..."
 bash scripts/restart_ray.sh
 
-echo "Ray server is refreshed."
+echo "Ray server is reflushed. "
 
-# ---- System tools ----
 sudo apt-get update
 sudo apt-get install -y jq
 uv pip install yq
 
-echo "Setup finished successfully in FreeAskAgent!"
+# SAM2 Tool setup
+echo "Setting up SAM2 Tool..."
+uv pip install git+https://github.com/facebookresearch/sam2.git
