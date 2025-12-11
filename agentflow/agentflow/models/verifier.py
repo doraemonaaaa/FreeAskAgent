@@ -1,13 +1,13 @@
 import json
 import os
 import re
-from typing import Any, Tuple
-
-from PIL import Image
+from collections.abc import Sequence
+from typing import Any, List, Tuple
 
 from agentflow.engine.factory import create_llm_engine
 from agentflow.models.formatters import MemoryVerification
 from agentflow.models.memory import Memory
+from agentflow.utils.utils import get_image_info, normalize_image_paths
 
 
 class Verifier:
@@ -18,29 +18,23 @@ class Verifier:
         self.llm_engine_name = llm_engine_name
         self.llm_engine_fixed_name = llm_engine_fixed_name
         self.is_multimodal = is_multimodal
-        self.llm_engine_fixed = create_llm_engine(model_string=llm_engine_fixed_name, is_multimodal=False, temperature=temperature)
-        self.llm_engine = create_llm_engine(model_string=llm_engine_name, is_multimodal=False, base_url=base_url, temperature=temperature)
+        self.llm_engine_fixed = create_llm_engine(
+            model_string=llm_engine_fixed_name,
+            is_multimodal=is_multimodal,
+            temperature=temperature
+        )
+        self.llm_engine = create_llm_engine(
+            model_string=llm_engine_name,
+            is_multimodal=is_multimodal,
+            base_url=base_url,
+            temperature=temperature
+        )
         self.toolbox_metadata = toolbox_metadata if toolbox_metadata is not None else {}
         self.available_tools = available_tools if available_tools is not None else []
         self.verbose = verbose
 
-    def get_image_info(self, image_path: str) -> dict:
-        image_info = {}
-        if image_path and os.path.isfile(image_path):
-            image_info["image_path"] = image_path
-            try:
-                with Image.open(image_path) as img:
-                    width, height = img.size
-                image_info.update({
-                    "width": width,
-                    "height": height
-                })
-            except Exception as e:
-                print(f"Error processing image file: {str(e)}")
-        return image_info
-
     def verificate_context(self, question: str, image: str, query_analysis: str, memory: Memory, step_count: int = 0, json_data: Any = None) -> Any:
-        image_info = self.get_image_info(image)
+        image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_memory_verification = f"""
 Task: Thoroughly evaluate the completeness and accuracy of the memory for fulfilling the given query, considering the potential need for additional tool usage.
@@ -130,13 +124,22 @@ IMPORTANT: The response must end with either "Conclusion: STOP" or "Conclusion: 
 """
 
         input_data = [prompt_memory_verification]
-        if image_info:
+        image_paths = normalize_image_paths(image)
+        if len(image_paths) > 1:
+            filenames = ", ".join(os.path.basename(path) for path in image_paths)
+            input_data.append(
+                f"The verification should consider {len(image_paths)} frames in chronological order: {filenames}."
+            )
+        for path in image_paths:
+            if not os.path.isfile(path):
+                print(f"Warning: image file not found '{path}' - skipping.")
+                continue
             try:
-                with open(image_info["image_path"], 'rb') as file:
+                with open(path, 'rb') as file:
                     image_bytes = file.read()
                 input_data.append(image_bytes)
             except Exception as e:
-                print(f"Error reading image file: {str(e)}")
+                print(f"Error reading image file '{path}': {str(e)}")
 
         stop_verification = self.llm_engine_fixed(input_data, response_format=MemoryVerification)
         if json_data is not None:

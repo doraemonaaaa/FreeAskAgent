@@ -87,12 +87,18 @@ class ChatOpenAI(EngineLM, CachedEngine):
             os.makedirs(self.image_cache_dir, exist_ok=True)
             super().__init__(cache_path=cache_path)
         
-        if os.getenv("OPENAI_API_KEY") is None:
+        if os.getenv("Proxy_API_BASE") is None:
             raise ValueError("Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models.")
-        
-        self.client = OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-        )
+        api_base = os.getenv("Proxy_API_BASE")
+        if api_base:
+            self.client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=api_base
+            )
+        else:
+            self.client = OpenAI(
+                api_key=os.getenv("OPENAI_API_KEY")
+            )
 
 
     @retry(wait=wait_random_exponential(min=1, max=5), stop=stop_after_attempt(5))
@@ -232,7 +238,7 @@ class ChatOpenAI(EngineLM, CachedEngine):
         formatted_content = []
         for item in content:
             if isinstance(item, bytes):
-                continue
+                # continue
                 base64_image = base64.b64encode(item).decode('utf-8')
                 formatted_content.append({
                     "type": "image_url",

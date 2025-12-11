@@ -8,7 +8,7 @@ from agentflow.models.planner import Planner
 from agentflow.models.verifier import Verifier
 from agentflow.models.memory import Memory
 from agentflow.models.executor import Executor
-from agentflow.models.utils import make_json_serializable_truncated
+from agentflow.utils.utils import make_json_serializable_truncated
 
 class Solver:
     def __init__(

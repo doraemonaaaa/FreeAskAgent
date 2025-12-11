@@ -166,7 +166,7 @@ class ChatDashScope(EngineLM, CachedEngine):
         formatted_content = []
         for item in content:
             if isinstance(item, bytes):
-                continue
+                # continue
                 base64_image = base64.b64encode(item).decode('utf-8')
                 formatted_content.append({
                     "type": "image_url",

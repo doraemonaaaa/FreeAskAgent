@@ -1,4 +1,5 @@
 import os
+from collections.abc import Sequence
 from agentflow.tools.base import BaseTool
 from agentflow.engine.factory import create_llm_engine
 
@@ -29,6 +30,7 @@ class Base_Generator_Tool(BaseTool):
             tool_version="1.0.0",
             input_types={
                 "query": "str - The query that includes query from the user to guide the agent to generate response.",
+                "image_paths": "str | list[str] - One path or an ordered list of image file paths (default: None).",
                 # "query": "str - The query that includes query from the user to guide the agent to generate response (Examples: 'Describe this image in detail').",
                 # "image": "str - The path to the image file if applicable (default: None).",
             },
@@ -56,30 +58,67 @@ class Base_Generator_Tool(BaseTool):
                 "limitation": LIMITATION,
                 "best_practice": BEST_PRACTICE
             }
-
+            
         )
         self.model_string = model_string  
         print(f"Initializing Generalist Tool with model: {self.model_string}")
-        # multimodal = True if image else False
-        multimodal = False
-        # llm_engine = create_llm_engine(model_string=self.model_string, is_multimodal=multimodal, base_url=self.base_url)
-        
-        # NOTE: deterministic mode
+
         self.llm_engine = create_llm_engine(
-            model_string=self.model_string, 
-            is_multimodal=multimodal, 
-            temperature=0.0, 
-            top_p=1.0, 
-            frequency_penalty=0.0, 
+            model_string=self.model_string,
+            is_multimodal=True,
+            temperature=0.0,
+            top_p=1.0,
+            frequency_penalty=0.0,
             presence_penalty=0.0
-            )
+        )
 
 
-    def execute(self, query, image=None):
-        
+    def execute(self, query, image=None, image_path=None):
+
         try:
             input_data = [query]
-            response = self.llm_engine(input_data[0])
+            image_buffers = []
+
+            def collect_images(candidate):
+                if not candidate:
+                    return
+                if isinstance(candidate, (bytes, bytearray)):
+                    image_buffers.append(bytes(candidate))
+                    return
+                if hasattr(candidate, "read"):
+                    try:
+                        image_buffers.append(candidate.read())
+                    except Exception as stream_error:
+                        print(f"Error reading image-like object: {stream_error}")
+                    return
+                if isinstance(candidate, (str, os.PathLike)):
+                    path = os.fspath(candidate)
+                    if os.path.isfile(path):
+                        try:
+                            with open(path, "rb") as file:
+                                image_buffers.append(file.read())
+                        except Exception as read_error:
+                            print(f"Error reading image file '{path}': {read_error}")
+                    else:
+                        print(f"Warning: image file not found '{path}' - skipping.")
+                    return
+                if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+                    for item in candidate:
+                        collect_images(item)
+
+            collect_images(image_path)
+            collect_images(image)
+
+            if len(image_buffers) > 1:
+                input_data.append(
+                    f"The following {len(image_buffers)} visual inputs are provided in chronological order."
+                )
+            input_data.extend(image_buffers)
+
+            if len(input_data) == 1:
+                response = self.llm_engine(input_data[0])
+            else:
+                response = self.llm_engine(input_data)
             return response
         except Exception as e:
             return f"Error generating response: {str(e)}"

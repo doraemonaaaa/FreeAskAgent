@@ -1,14 +1,13 @@
 import json
 import os
 import re
-from typing import Any, Dict, List, Tuple
-
-from PIL import Image
+from collections.abc import Sequence
+from typing import Any, Dict, List, Optional, Tuple
 
 from agentflow.engine.factory import create_llm_engine
 from agentflow.models.formatters import NextStep, QueryAnalysis
 from agentflow.models.memory import Memory
-
+from agentflow.utils.utils import get_image_info, normalize_image_paths
 
 class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
@@ -18,49 +17,73 @@ class Planner:
         self.llm_engine_name = llm_engine_name
         self.llm_engine_fixed_name = llm_engine_fixed_name
         self.is_multimodal = is_multimodal
-        # self.llm_engine_mm = create_llm_engine(model_string=llm_engine_name, is_multimodal=False, base_url=base_url, temperature = temperature)
-        self.llm_engine_fixed = create_llm_engine(model_string=llm_engine_fixed_name, is_multimodal=False, temperature = temperature)
-        self.llm_engine = create_llm_engine(model_string=llm_engine_name, is_multimodal=False, base_url=base_url, temperature = temperature)
+        # Allow downstream engines to ingest image bytes when available.
+        self.llm_engine_fixed = create_llm_engine(
+            model_string=llm_engine_fixed_name,
+            is_multimodal=is_multimodal,
+            temperature=temperature
+        )
+        self.llm_engine = create_llm_engine(
+            model_string=llm_engine_name,
+            is_multimodal=is_multimodal,
+            base_url=base_url,
+            temperature=temperature
+        )
         self.toolbox_metadata = toolbox_metadata if toolbox_metadata is not None else {}
         self.available_tools = available_tools if available_tools is not None else []
 
         self.verbose = verbose
-    def get_image_info(self, image_path: str) -> Dict[str, Any]:
-        image_info = {}
-        if image_path and os.path.isfile(image_path):
-            image_info["image_path"] = image_path
-            try:
-                with Image.open(image_path) as img:
-                    width, height = img.size
-                image_info.update({
-                    "width": width,
-                    "height": height
+    
+    # 调试输出：只打印安全的元信息，不输出原始字节
+    def summarize_input_data(self, items):
+        summary = []
+        for i, item in enumerate(items):
+            if isinstance(item, (bytes, bytearray)):
+                summary.append({
+                    "index": i,
+                    "type": "bytes",
+                    "length": len(item)
                 })
-            except Exception as e:
-                print(f"Error processing image file: {str(e)}")
-        return image_info
+            else:
+                # 对长文本做截断，避免日志过长
+                s = str(item)
+                summary.append({
+                    "index": i,
+                    "type": type(item).__name__,
+                    "preview": (s[:200] + "...") if len(s) > 200 else s
+                })
+        return summary
 
     def generate_base_response(self, question: str, image: str, max_tokens: int = 2048) -> str:
-        image_info = self.get_image_info(image)
+        image_info = get_image_info(image)
 
         input_data = [question]
-        if image_info and "image_path" in image_info:
+        image_paths = normalize_image_paths(image)
+        if len(image_paths) > 1:
+            filenames = ", ".join(os.path.basename(path) for path in image_paths)
+            input_data.append(
+                f"The following {len(image_paths)} frames are provided in chronological order (oldest to newest): {filenames}."
+            )
+        for path in image_paths:
+            if not os.path.isfile(path):
+                print(f"Warning: image file not found '{path}' - skipping.")
+                continue
             try:
-                with open(image_info["image_path"], 'rb') as file:
+                with open(path, 'rb') as file:
                     image_bytes = file.read()
                 input_data.append(image_bytes)
             except Exception as e:
-                print(f"Error reading image file: {str(e)}")
+                print(f"Error reading image file '{path}': {str(e)}")
 
+        print("Input data of `generate_base_response()` (summary):", self.summarize_input_data(input_data))
 
-        print("Input data of `generate_base_response()`: ", input_data)
         self.base_response = self.llm_engine(input_data, max_tokens=max_tokens)
         # self.base_response = self.llm_engine_fixed(input_data, max_tokens=max_tokens)
 
         return self.base_response
 
     def analyze_query(self, question: str, image: str) -> str:
-        image_info = self.get_image_info(image)
+        image_info = get_image_info(image)
 
         if self.is_multimodal:
             query_prompt = f"""
@@ -109,17 +132,25 @@ Format your response with a summary of the query, lists of skills and tools with
 Be biref and precise with insight. 
 """
 
-
         input_data = [query_prompt]
-        if image_info:
+        image_paths = normalize_image_paths(image)
+        if len(image_paths) > 1:
+            filenames = ", ".join(os.path.basename(path) for path in image_paths)
+            input_data.append(
+                f"The accompanying sequence contains {len(image_paths)} frames in chronological order: {filenames}."
+            )
+        for path in image_paths:
+            if not os.path.isfile(path):
+                print(f"Warning: image file not found '{path}' - skipping.")
+                continue
             try:
-                with open(image_info["image_path"], 'rb') as file:
+                with open(path, 'rb') as file:
                     image_bytes = file.read()
                 input_data.append(image_bytes)
             except Exception as e:
-                print(f"Error reading image file: {str(e)}")
+                print(f"Error reading image file '{path}': {str(e)}")
 
-        print("Input data of `analyze_query()`: ", input_data)
+        print("Input data of `analyze_query()`: ", self.summarize_input_data(input_data))
 
         # self.query_analysis = self.llm_engine_mm(input_data, response_format=QueryAnalysis)
         # self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)
@@ -292,7 +323,7 @@ Rules:
 
 
     def generate_final_output(self, question: str, image: str, memory: Memory) -> str:
-        image_info = self.get_image_info(image)
+        image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_generate_final_output = f"""
 Task: Generate the final output based on the query, image, and tools used in the process.
@@ -350,13 +381,22 @@ Instructions:
 """
 
         input_data = [prompt_generate_final_output]
-        if image_info:
+        image_paths = normalize_image_paths(image)
+        if len(image_paths) > 1:
+            filenames = ", ".join(os.path.basename(path) for path in image_paths)
+            input_data.append(
+                f"The final output should consider {len(image_paths)} frames provided in chronological order: {filenames}."
+            )
+        for path in image_paths:
+            if not os.path.isfile(path):
+                print(f"Warning: image file not found '{path}' - skipping.")
+                continue
             try:
-                with open(image_info["image_path"], 'rb') as file:
+                with open(path, 'rb') as file:
                     image_bytes = file.read()
                 input_data.append(image_bytes)
             except Exception as e:
-                print(f"Error reading image file: {str(e)}")
+                print(f"Error reading image file '{path}': {str(e)}")
 
         # final_output = self.llm_engine_mm(input_data)
         # final_output = self.llm_engine(input_data)
@@ -366,7 +406,7 @@ Instructions:
 
 
     def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
-        image_info = self.get_image_info(image)
+        image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_generate_final_output = f"""
 Context:
@@ -401,13 +441,22 @@ Output Structure:
 """
 
         input_data = [prompt_generate_final_output]
-        if image_info:
+        image_paths = normalize_image_paths(image)
+        if len(image_paths) > 1:
+            filenames = ", ".join(os.path.basename(path) for path in image_paths)
+            input_data.append(
+                f"Consider the following {len(image_paths)} frames in chronological order: {filenames}."
+            )
+        for path in image_paths:
+            if not os.path.isfile(path):
+                print(f"Warning: image file not found '{path}' - skipping.")
+                continue
             try:
-                with open(image_info["image_path"], 'rb') as file:
+                with open(path, 'rb') as file:
                     image_bytes = file.read()
                 input_data.append(image_bytes)
             except Exception as e:
-                print(f"Error reading image file: {str(e)}")
+                print(f"Error reading image file '{path}': {str(e)}")
 
         # final_output = self.llm_engine(input_data)
         final_output = self.llm_engine_fixed(input_data)
