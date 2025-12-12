@@ -109,9 +109,6 @@ def construct_fast_solver(
     enabled_tools = enabled_tools or ["all"]
     tool_engine = tool_engine or ["Default"]
 
-    if enable_multimodal is None:
-        enable_multimodal = supports_multimodal(llm_engine_name)
-
     initializer = Initializer(
         enabled_tools=enabled_tools,
         tool_engine=tool_engine,

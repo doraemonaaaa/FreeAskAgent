@@ -34,7 +34,7 @@ class GroundedSAM2_Tool(BaseTool):
                 "text_prompts": "list[str] - Text prompts to ground (comma/space separated phrase list), set according to your needs",
                 "box_threshold": "float - GroundingDINO box threshold (default: 0.3)",
                 "text_threshold": "float - GroundingDINO text threshold (default: 0.25)",
-                "top_k": "int - Limit number of grounded boxes before SAM2 refinement (default: 10)",
+                "top_k": "int - Limit number of grounded boxes before SAM2 refinement (default: 20)",
                 "output_dir": "str - Directory to save visualization (default: tmp)",
                 "return_masks": "bool - Whether to include mask arrays in output (default: False)",
             },
@@ -83,7 +83,7 @@ class GroundedSAM2_Tool(BaseTool):
         text_prompts: List[str],
         box_threshold: float = 0.3,
         text_threshold: float = 0.25,
-        top_k: int = 10,
+        top_k: int = 20,
         output_dir: str = "tmp",
         return_masks: bool = False,
     ) -> Dict[str, Any]:
