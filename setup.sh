@@ -75,3 +75,6 @@ uv pip install yq
 # SAM2 Tool setup
 echo "Setting up SAM2 Tool..."
 uv pip install git+https://github.com/facebookresearch/sam2.git
+
+# Grounded SAM2 Tool setup
+uv pip install groundingdino-py sam-2

@@ -23,7 +23,7 @@ FAST_MODE = False
 if FAST_MODE:
     solver = construct_fast_solver(
         llm_engine_name=llm_engine_name,
-        enabled_tools=["Base_Generator_Tool", "SAM2_Perception_Tool"],
+        enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
         tool_engine=["gpt-4o"],
         output_types="direct",
         max_steps=1,
@@ -36,7 +36,7 @@ if FAST_MODE:
 else:
     solver = construct_solver(
         llm_engine_name=llm_engine_name,
-        enabled_tools=["Base_Generator_Tool", "SAM2_Perception_Tool"],
+        enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
         tool_engine=["gpt-4o"],
         model_engine=["gpt-4o", "gpt-4o", "gpt-4o", "gpt-4o"],
         output_types="direct",
@@ -66,6 +66,10 @@ navigation_task_prompt = """"
 每次动作只能选择一个动作和一个距离, 比如'前进2m'
 [Output Format]
 请给出后续5步的导航指令序列。
+[Tools]
+你可以使用GroundedSAM2_Tool来识别图像中的物体，自己设置prompt比如obst，获取物体的位置和类别信息，辅助你做出导航决策。你可以获取obstacle,street,building等信息
+[Image Sequence]
+这里有一系列按时间顺序排列的图像帧，展示了你当前的视野。请根据这些图像帧来理解环境。
 """
 
 output = solver.solve(
