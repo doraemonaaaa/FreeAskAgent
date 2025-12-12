@@ -221,7 +221,6 @@ marimo/_lsp/
 __marimo__/
 
 # Weight of models
-weights/
 *.pth
 *.ckpt
 *.pt

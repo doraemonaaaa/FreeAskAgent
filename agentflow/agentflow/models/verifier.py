@@ -4,10 +4,10 @@ import re
 from collections.abc import Sequence
 from typing import Any, List, Tuple
 
-from agentflow.engine.factory import create_llm_engine
-from agentflow.models.formatters import MemoryVerification
-from agentflow.models.memory import Memory
-from agentflow.utils.utils import get_image_info, normalize_image_paths
+from ..engine.factory import create_llm_engine
+from ..models.formatters import MemoryVerification
+from ..models.memory import Memory
+from ..utils.utils import get_image_info, normalize_image_paths
 
 
 class Verifier:

@@ -18,7 +18,7 @@ llm_engine_name = "gpt-4o"
 
 # Construct the solver
 # Fast MODE Only go to planner
-FAST_MODE = True
+FAST_MODE = False
 
 if FAST_MODE:
     solver = construct_fast_solver(
@@ -52,9 +52,6 @@ image_sequence = None
 if not image_sequence:
     image_sequence = ["/home/pengyh/workspace/FreeAskAgent/input_img1.jpg"]
 
-
-# Solve the user query with the frame sequence (oldest -> newest)
-# output = solver.solve("What is the capital of France?")
 navigation_task_prompt = """"
 [Task]
 请描述视野中的可行动作并选出后续一连串的导航轨迹指令
@@ -72,7 +69,7 @@ navigation_task_prompt = """"
 """
 
 output = solver.solve(
-    "",
+    navigation_task_prompt,
     image_paths=image_sequence[:5],  # take up to 5 chronological frames
 )
 

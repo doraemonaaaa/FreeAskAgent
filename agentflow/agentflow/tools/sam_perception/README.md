@@ -301,3 +301,31 @@ tool = SAM2_Perception_Tool(model_cfg="sam2.1_hiera_tiny")
 - [SAM 2 GitHub](https://github.com/facebookresearch/sam2)
 - [SAM 2 论文](https://ai.meta.com/research/publications/sam-2-segment-anything-in-images-and-videos/)
 - [SAM 2 Demo](https://sam2.metademolab.com/)
+
+## 本地 config 和 checkpoint 路径说明（自定义项目结构推荐）
+
+> **2025年12月更新：本工具已支持直接在 sam_perception 子目录下放置 config 和 checkpoint，无需依赖 site-packages 路径，也无需软链。**
+
+- **配置文件(config)**：
+  - 路径：`agentflow/agentflow/tools/sam_perception/configs/sam2.1/sam2.1_hiera_large.yaml`
+  - 你可以把所有模型的 yaml 配置都放在 `sam_perception/configs/sam2.1/` 目录下。
+- **权重文件(checkpoint)**：
+  - 路径：`agentflow/agentflow/tools/sam_perception/checkpoints/sam2.1_hiera_large.pt`
+  - 你可以把所有模型的 pt 文件都放在 `sam_perception/checkpoints/` 目录下。
+
+**代码会自动用相对路径查找，无论你在哪里运行都能找到。**
+
+例如：
+```python
+# 只需这样初始化即可，无需指定绝对路径
+from agentflow.agentflow.tools.sam_perception.tool import SAM2_Perception_Tool
+
+tool = SAM2_Perception_Tool(model_cfg="sam2.1_hiera_large")
+# 会自动加载：
+#   configs/sam2.1/sam2.1_hiera_large.yaml
+#   checkpoints/sam2.1_hiera_large.pt
+```
+
+> ⚠️ 如果缺少 config 或 checkpoint，会报错提示缺哪个文件。
+
+**这样管理后，迁移/多环境/多人协作都很方便！**

@@ -21,7 +21,7 @@ import json
 import numpy as np
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Tuple
-from agentflow.agentflow.tools.base import BaseTool
+from ..base import BaseTool
 
 # Tool name mapping - this defines the external name for this tool
 TOOL_NAME = "SAM2_Perception_Tool"
@@ -67,9 +67,9 @@ class SAM2_Perception_Tool(BaseTool):
     require_llm_engine = False  # SAM is a vision model, not LLM
 
     def __init__(
-        self, 
-        model_cfg: str = "sam2.1_hiera_large", 
-        checkpoint_path: str = None, 
+        self,
+        model_cfg: str = "sam2.1_hiera_l",
+        checkpoint_path: str = None,
         device: str = "cuda"
     ):
         """
@@ -97,14 +97,14 @@ class SAM2_Perception_Tool(BaseTool):
                 "box": "list[int] - Bounding box [x1, y1, x2, y2] for box mode (optional)",
                 "output_dir": "str - Directory to save visualization results (optional)",
                 "return_masks": "bool - Whether to return mask arrays (default: False)",
-                "top_k": "int - Number of top masks to return in automatic mode (default: 10)",
+                "top_k": "int - Number of top masks to return in automatic mode (default: 10), Choose parameter according to your needs or scene complexity.",
                 "frame_indices": "list[int] - Specific frame indices to process in video mode (optional)",
             },
             output_type="dict - Dictionary containing segmentation results with mask info, bounding boxes, and optionally mask arrays",
             demo_commands=[
                 {
-                    "command": 'result = tool.execute(image_path="path/to/image.jpg", mode="automatic")',
-                    "description": "Automatically segment all objects in the image"
+                    "command": 'result = tool.execute(image_path="path/to/image.jpg", mode="automatic", top_k=10, output_dir="tmp")',
+                    "description": "Automatically segment all objects in the image and save to tmp"
                 },
                 {
                     "command": 'result = tool.execute(image_path="path/to/image.jpg", mode="point", points=[[100, 200]], point_labels=[1])',
@@ -126,7 +126,15 @@ class SAM2_Perception_Tool(BaseTool):
         )
         
         self.model_cfg = model_cfg
-        self.checkpoint_path = checkpoint_path
+        # Always resolve config/checkpoint relative to this file
+        self._sam2_dir = os.path.dirname(os.path.abspath(__file__))
+        # Local filesystem config path (may or may not exist)
+        self.config_file = os.path.join(self._sam2_dir, "configs", "sam2.1", f"{self.model_cfg}.yaml")
+        # Hydra / sam2 package config name fallback is not used here.
+        # Keep _hydra_config_name explicit and set to None to avoid deriving from a short map.
+        self._hydra_config_name = None
+        self.default_checkpoint_path = os.path.join(self._sam2_dir, "checkpoints", f"{self.model_cfg}.pt")
+        self.checkpoint_path = checkpoint_path or self.default_checkpoint_path
         self.device = device
         self.sam2_model = None
         self.image_predictor = None
@@ -149,19 +157,6 @@ class SAM2_Perception_Tool(BaseTool):
                 print("Warning: CUDA not available, falling back to CPU")
                 self.device = "cpu"
             
-            # SAM 2 model configs and their checkpoint files
-            model_checkpoints = {
-                "sam2.1_hiera_tiny": "sam2.1_hiera_tiny.pt",
-                "sam2.1_hiera_small": "sam2.1_hiera_small.pt",
-                "sam2.1_hiera_base_plus": "sam2.1_hiera_base_plus.pt",
-                "sam2.1_hiera_large": "sam2.1_hiera_large.pt",
-                # Legacy SAM 2.0 models
-                "sam2_hiera_tiny": "sam2_hiera_tiny.pt",
-                "sam2_hiera_small": "sam2_hiera_small.pt",
-                "sam2_hiera_base_plus": "sam2_hiera_base_plus.pt",
-                "sam2_hiera_large": "sam2_hiera_large.pt",
-            }
-            
             # Try to import SAM 2
             try:
                 from sam2.build_sam import build_sam2, build_sam2_video_predictor
@@ -174,54 +169,44 @@ class SAM2_Perception_Tool(BaseTool):
                     "Or from source:\n"
                     "pip install git+https://github.com/facebookresearch/sam2.git"
                 )
-            
-            # Find or download checkpoint
-            if self.checkpoint_path is None:
-                checkpoint_name = model_checkpoints.get(self.model_cfg)
-                if checkpoint_name is None:
-                    raise ValueError(
-                        f"Unknown model config: {self.model_cfg}. "
-                        f"Available: {list(model_checkpoints.keys())}"
-                    )
-                
-                # Try to find checkpoint in common locations
-                possible_paths = [
-                    f"./{checkpoint_name}",
-                    f"./checkpoints/{checkpoint_name}",
-                    f"~/checkpoints/{checkpoint_name}",
-                    f"/home/pengyh/checkpoints/{checkpoint_name}",
-                    f"./sam2_checkpoints/{checkpoint_name}",
-                ]
-                
-                for path in possible_paths:
-                    expanded_path = os.path.expanduser(path)
-                    if os.path.exists(expanded_path):
-                        self.checkpoint_path = expanded_path
-                        break
-                
-                if self.checkpoint_path is None:
-                    # Try to auto-download using sam2's built-in mechanism
-                    print(f"Checkpoint not found locally, attempting to use sam2's auto-download...")
-                    self.checkpoint_path = None  # SAM2 can auto-download
-            
+
             print(f"Loading SAM 2 model: {self.model_cfg}")
-            if self.checkpoint_path:
-                print(f"Checkpoint path: {self.checkpoint_path}")
-            
-            # Build SAM 2 model for images
-            if self.checkpoint_path:
-                self.sam2_model = build_sam2(
-                    config_file=f"configs/sam2.1/{self.model_cfg}.yaml",
-                    ckpt_path=self.checkpoint_path,
-                    device=self.device,
-                )
+            print(f"Local config path: {self.config_file}")
+            print(f"Package config name (fallback): {self._hydra_config_name}")
+            print(f"Checkpoint path: {self.checkpoint_path}")
+
+            if not os.path.exists(self.checkpoint_path):
+                raise FileNotFoundError(f"Checkpoint file not found: {self.checkpoint_path}")
+
+            # Use local config if it exists
+            if os.path.exists(self.config_file):
+                from hydra import initialize_config_dir, compose
+                from hydra.core.global_hydra import GlobalHydra
+                
+                config_dir = os.path.dirname(self.config_file)
+                config_name = os.path.basename(self.config_file).replace('.yaml', '')
+                
+                # Clear any existing Hydra instance
+                GlobalHydra.instance().clear()
+                
+                # Initialize with the local config directory
+                with initialize_config_dir(config_dir=config_dir, version_base=None):
+                    cfg = compose(config_name=config_name)
+                
+                # Build model from config and checkpoint
+                from hydra.utils import instantiate
+                from omegaconf import OmegaConf
+                
+                OmegaConf.resolve(cfg)
+                self.sam2_model = instantiate(cfg.model, _recursive_=True)
+                
+                # Load checkpoint
+                from sam2.build_sam import _load_checkpoint
+                _load_checkpoint(self.sam2_model, self.checkpoint_path)
+                self.sam2_model = self.sam2_model.to(self.device)
+                self.sam2_model.eval()
             else:
-                # Try using model ID for auto-download (newer sam2 versions)
-                self.sam2_model = build_sam2(
-                    config_file=f"configs/sam2.1/{self.model_cfg}.yaml",
-                    ckpt_path=None,
-                    device=self.device,
-                )
+                raise FileNotFoundError(f"Config file not found: {self.config_file}")
             
             # Initialize image predictor
             self.image_predictor = SAM2ImagePredictor(self.sam2_model)
@@ -257,16 +242,16 @@ class SAM2_Perception_Tool(BaseTool):
         
         try:
             from sam2.build_sam import build_sam2_video_predictor
-            
+
             if self.checkpoint_path:
                 self.video_predictor = build_sam2_video_predictor(
-                    config_file=f"configs/sam2.1/{self.model_cfg}.yaml",
+                    config_file=self.config_file,
                     ckpt_path=self.checkpoint_path,
                     device=self.device,
                 )
             else:
                 self.video_predictor = build_sam2_video_predictor(
-                    config_file=f"configs/sam2.1/{self.model_cfg}.yaml",
+                    config_file=self.config_file,
                     ckpt_path=None,
                     device=self.device,
                 )
@@ -386,6 +371,10 @@ class SAM2_Perception_Tool(BaseTool):
             self._lazy_init()
             
             import torch
+
+            # Enforce defaults if not provided by caller
+            if output_dir is None:
+                output_dir = "tmp"
             
             if mode == "video":
                 return self._execute_video(
@@ -843,43 +832,89 @@ if __name__ == "__main__":
     
     Run:
         cd agentflow/tools/sam_perception
-        python tool_sam2.py
+        python tool.py --image /path/to/image.jpg --mode automatic --output-dir ./sam2_output
     """
     import os
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Run SAM2_Perception_Tool on an input image.")
+    parser.add_argument("--image", type=str, help="Path to the input image file")
+    parser.add_argument("--mode", type=str, default="automatic", choices=["automatic", "point", "box"], help="Segmentation mode")
+    parser.add_argument("--output-dir", type=str, default="./sam2_output", help="Directory to save visualization results")
+    parser.add_argument("--model-cfg", type=str, default="sam2.1_hiera_l", help="SAM2 model config name")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to checkpoint .pt file")
+    parser.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"], help="Device to run on")
+    parser.add_argument("--points", type=str, default=None, help="Point prompts as 'x1,y1;x2,y2'")
+    parser.add_argument("--box", type=str, default=None, help="Box prompt as 'x1,y1,x2,y2'")
+    parser.add_argument("--top-k", type=int, default=5, help="Top K masks to keep in automatic mode")
+    args = parser.parse_args()
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     print(f"Script directory: {script_dir}")
     
-    # Initialize tool with different model sizes
-    # Options: sam2.1_hiera_tiny, sam2.1_hiera_small, sam2.1_hiera_base_plus, sam2.1_hiera_large
-    tool = SAM2_Perception_Tool(model_cfg="sam2.1_hiera_large")
+    # Initialize tool with selectable model settings
+    tool = SAM2_Perception_Tool(
+        model_cfg=args.model_cfg,
+        checkpoint_path=args.checkpoint,
+        device=args.device,
+    )
     
     # Print metadata
     metadata = tool.get_metadata()
     print("Tool Metadata:")
     print(json.dumps(metadata, indent=2, default=str))
     
-    # Test with a sample image (if available)
-    test_image = "/home/pengyh/workspace/FreeAskAgent/input_img1.jpg"
-    if os.path.exists(test_image):
-        print(f"\nTesting with image: {test_image}")
-        
-        # Test automatic mode
+    # Validate and parse prompts
+    parsed_points = None
+    if args.points:
+        try:
+            pts = []
+            for p in args.points.split(";"):
+                if not p:
+                    continue
+                x_str, y_str = p.split(",")
+                pts.append([int(float(x_str)), int(float(y_str))])
+            parsed_points = pts if pts else None
+        except Exception as e:
+            print(f"Warning: Failed to parse --points '{args.points}': {e}")
+            parsed_points = None
+    
+    parsed_box = None
+    if args.box:
+        try:
+            parts = [int(float(t)) for t in args.box.split(",")]
+            if len(parts) == 4:
+                parsed_box = parts
+            else:
+                print("Warning: --box must have 4 comma-separated values 'x1,y1,x2,y2'.")
+        except Exception as e:
+            print(f"Warning: Failed to parse --box '{args.box}': {e}")
+            parsed_box = None
+    
+    # Run on provided image if valid
+    if args.image and os.path.exists(args.image):
+        print(f"\nRunning on image: {args.image}")
         result = tool.execute(
-            image_path=test_image,
-            mode="automatic",
-            top_k=5,
-            output_dir="./sam2_output"
+            image_path=args.image,
+            mode=args.mode,
+            points=parsed_points,
+            box=parsed_box,
+            top_k=args.top_k,
+            output_dir=args.output_dir,
         )
         
-        print("\nAutomatic Mode Result:")
+        print("\nResult Summary:")
         print(f"Number of masks: {result.get('num_masks', 0)}")
-        print(f"Scene analysis: {result.get('scene_analysis', {}).get('analysis', 'N/A')}")
-        
+        vis_path = result.get("visualization_path")
+        if vis_path:
+            print(f"Visualization saved: {vis_path}")
+        sa = result.get('scene_analysis', {})
+        if sa:
+            print(f"Scene analysis: {sa.get('analysis', 'N/A')}")
         if "error" in result:
             print(f"Error: {result['error']}")
     else:
-        print(f"\nTest image not found: {test_image}")
-        print("Please provide a valid image path for testing.")
+        print("\nNo valid --image provided or file does not exist.")
+        print("Example: python tool.py --image /path/to/image.jpg --mode automatic --output-dir ./sam2_output")
     
     print("\nDone!")

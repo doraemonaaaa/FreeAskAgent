@@ -1,14 +1,14 @@
 import argparse
 import time
 import json
-from typing import Optional
+from typing import Optional, Sequence, Union
 
-from agentflow.models.initializer import Initializer
-from agentflow.models.planner import Planner
-from agentflow.models.verifier import Verifier
-from agentflow.models.memory import Memory
-from agentflow.models.executor import Executor
-from agentflow.utils.utils import make_json_serializable_truncated
+from ..agentflow.models.initializer import Initializer
+from ..agentflow.models.planner import Planner
+from ..agentflow.models.verifier import Verifier
+from ..agentflow.models.memory import Memory
+from ..agentflow.models.executor import Executor
+from ..agentflow.utils.utils import make_json_serializable_truncated
 
 class Solver:
     def __init__(
@@ -38,7 +38,7 @@ class Solver:
         self.temperature  = temperature
         assert all(output_type in ["base", "final", "direct"] for output_type in self.output_types), "Invalid output type. Supported types are 'base', 'final', 'direct'."
         self.verbose = verbose
-    def solve(self, question: str, image_path: Optional[str] = None):
+    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None):
         """
         Solve a single problem from the benchmark dataset.
         
@@ -51,16 +51,20 @@ class Solver:
         # Initialize json_data with basic problem information
         json_data = {
             "query": question,
-            "image": image_path
+            "images": image_paths
         }
         if self.verbose:
             print(f"\n==> 🔍 Received Query: {question}")
-            if image_path:
-                print(f"\n==> 🖼️ Received Image: {image_path}")
+            if image_paths:
+                if isinstance(image_paths, Sequence) and not isinstance(image_paths, (str, bytes, bytearray)):
+                    for idx, path in enumerate(image_paths):
+                        print(f"==> 🖼️ Frame {idx+1}: {path}")
+                else:
+                    print(f"\n==> 🖼️ Received Image: {image_paths}")
 
         # Generate base response if requested
         if 'base' in self.output_types:
-            base_response = self.planner.generate_base_response(question, image_path, self.max_tokens)
+            base_response = self.planner.generate_base_response(question, image_paths, self.max_tokens)
             json_data["base_response"] = base_response
             if self.verbose:
                 print(f"\n==> 📝 Base Response from LLM:\n\n{base_response}")
@@ -76,7 +80,7 @@ class Solver:
 
             # [1] Analyze query
             query_start_time = time.time()
-            query_analysis = self.planner.analyze_query(question, image_path)
+            query_analysis = self.planner.analyze_query(question, image_paths)
             json_data["query_analysis"] = query_analysis
             if self.verbose:
                 print(f"\n==> 🔍 Step 0: Query Analysis\n")
@@ -94,7 +98,7 @@ class Solver:
                 local_start_time = time.time()
                 next_step = self.planner.generate_next_step(
                     question, 
-                    image_path, 
+                    image_paths, 
                     query_analysis, 
                     self.memory, 
                     step_count, 
@@ -117,7 +121,7 @@ class Solver:
                     local_start_time = time.time()
                     tool_command = self.executor.generate_tool_command(
                         question, 
-                        image_path, 
+                        image_paths, 
                         context, 
                         sub_goal, 
                         tool_name, 
@@ -154,7 +158,7 @@ class Solver:
                 local_start_time = time.time()
                 stop_verification = self.verifier.verificate_context(
                     question,
-                    image_path,
+                    image_paths,
                     query_analysis,
                     self.memory,
                     step_count,
@@ -180,13 +184,13 @@ class Solver:
 
             # Generate final output if requested
             if 'final' in self.output_types:
-                final_output = self.planner.generate_final_output(question, image_path, self.memory)
+                final_output = self.planner.generate_final_output(question, image_paths, self.memory)
                 json_data["final_output"] = final_output
                 print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
-                direct_output = self.planner.generate_direct_output(question, image_path, self.memory)
+                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
@@ -207,7 +211,8 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
                      verbose : bool = True,
                      vllm_config_path : str = None,
                      base_url : str = None,
-                     temperature: float = 0.0
+                     temperature: float = 0.0,
+                     enable_multimodal: Optional[bool] = None,
                      ):
 
     # Parse model_engine configuration
@@ -235,7 +240,8 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
         available_tools=initializer.available_tools,
         verbose=verbose,
         base_url=base_url,
-        temperature=temperature
+        temperature=temperature,
+        is_multimodal=enable_multimodal
     )
 
     # Instantiate Verifier
@@ -246,7 +252,8 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
         available_tools=initializer.available_tools,
         verbose=verbose,
         base_url=base_url if verifier_engine == llm_engine_name else None,
-        temperature=temperature
+        temperature=temperature,
+        is_multimodal=enable_multimodal
     )
 
     # Instantiate Memory

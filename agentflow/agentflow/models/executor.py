@@ -6,8 +6,8 @@ import signal
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from agentflow.engine.factory import create_llm_engine
-from agentflow.models.formatters import ToolCommand
+from ..engine.factory import create_llm_engine
+from ..models.formatters import ToolCommand
 
 # Tool name mapping: Static fallback mapping (long external names to internal)
 TOOL_NAME_MAPPING_LONG = {

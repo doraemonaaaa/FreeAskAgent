@@ -2,10 +2,9 @@ import time
 from collections.abc import Sequence
 from typing import Optional, Union
 
-from agentflow.models.initializer import Initializer
-from agentflow.models.memory import Memory
-from agentflow.models.planner import Planner
-
+from ..agentflow.models.initializer import Initializer
+from ..agentflow.models.memory import Memory
+from ..agentflow.models.planner import Planner
 
 class FastSolver:
     """Lightweight solver that only uses the planner to produce answers."""
@@ -90,25 +89,6 @@ class FastSolver:
 
         return payload
 
-
-def _supports_multimodal(model_name: Optional[str]) -> bool:
-    if not model_name:
-        return False
-    normalized = model_name.lower()
-    multimodal_keywords = [
-        "gpt-4o",
-        "gpt-4.1",
-        "gpt-4-vision",
-        "gpt-4-turbo",
-        "qwen2.5-7b",
-        "qwen2-vl",
-        "dashscope",
-        "gemini-1.5",
-        "gemini-pro-vision",
-    ]
-    return any(keyword in normalized for keyword in multimodal_keywords)
-
-
 def construct_fast_solver(
     llm_engine_name: str = "gpt-4o",
     enabled_tools: Optional[list[str]] = None,
@@ -130,7 +110,7 @@ def construct_fast_solver(
     tool_engine = tool_engine or ["Default"]
 
     if enable_multimodal is None:
-        enable_multimodal = _supports_multimodal(llm_engine_name)
+        enable_multimodal = supports_multimodal(llm_engine_name)
 
     initializer = Initializer(
         enabled_tools=enabled_tools,
