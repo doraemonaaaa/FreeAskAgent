@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PORT=${PORT:-8766}
+HOST=${HOST:-0.0.0.0}
+
+BASELINENAME=${BASELINENAME:-agent_baseline}
+BASELINE_SPEC=${BASELINE_SPEC:-closed_loop.baselines.${BASELINENAME}:create_baseline}
+
+python closed_loop/freeaskworld_connector/start_cloudflared.py "$PORT" &
+CLOUDFLARED_PID=$!
+
+python -m closed_loop.freeaskworld_connector.server \
+    --host "$HOST" \
+    --port "$PORT" \
+    --baseline "$BASELINE_SPEC"
+
+wait "$CLOUDFLARED_PID"
