@@ -1,4 +1,7 @@
-"""Agent baseline implementation using the solver from quick_start.py."""
+"""Agent baseline implementation using the solver from quick_start.py.
+
+Works with WebRTC DataChannel for communication.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +9,7 @@ import asyncio
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -38,6 +42,7 @@ class AgentBaseline(ClosedLoopBaseline):
         self._solver = None
         self._setup_solver()
         self._temp_dir = tempfile.TemporaryDirectory()
+        self._inference_lock = asyncio.Lock()
 
     def _setup_solver(self):
         # Load environment variables
@@ -46,11 +51,27 @@ class AgentBaseline(ClosedLoopBaseline):
         
         print("Proxy_API_BASE:" + os.environ.get("Proxy_API_BASE", "Not Set"))
         print("OPENAI_API_KEY:" + os.environ.get("OPENAI_API_KEY", "Not Set"))
-        
-        llm_engine_name = "gpt-4o"
-        
-        # Using the configuration from quick_start.py (FAST_MODE = False)
-        if construct_solver:
+
+        llm_engine_name = os.environ.get("LLM_ENGINE_NAME", "gpt-4o")
+        # fast_mode = os.environ.get("FAST_MODE", "false").lower() == "true"
+        fast_mode = True  # Always use fast mode for this baseline
+
+        if fast_mode and construct_fast_solver:
+            # Fast planner-only solver; lightweight but less capable.
+            self._solver = construct_fast_solver(
+                llm_engine_name=llm_engine_name,
+                enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
+                tool_engine=["gpt-4o"],
+                output_types="direct",
+                max_steps=1,
+                max_time=10,
+                max_tokens=1024,
+                fast_max_tokens=256,
+                enable_multimodal=True,
+                verbose=True,
+            )
+        elif construct_solver:
+            # Full solver for higher-quality navigation planning.
             self._solver = construct_solver(
                 llm_engine_name=llm_engine_name,
                 enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
@@ -59,16 +80,18 @@ class AgentBaseline(ClosedLoopBaseline):
                 output_types="direct",
                 max_time=300,
                 max_steps=1,
-                enable_multimodal=True
+                enable_multimodal=True,
             )
         else:
-            print("Error: Could not construct solver.")
+            print("Warning: solver constructors unavailable; baseline will not respond.")
+            self._solver = None
 
     async def on_session_start(self, session: BaselineSession) -> None:
         session.metadata.clear()
         session.metadata["frame_history"] = []
 
     async def on_session_end(self, session: BaselineSession) -> None:
+        
         # Cleanup temp files for this session
         if "frame_history" in session.metadata:
             for path_str in session.metadata["frame_history"]:
@@ -91,54 +114,66 @@ class AgentBaseline(ClosedLoopBaseline):
         if not self._ready_to_respond(session):
             return None
 
+        # Only run one inference at a time; drop intermediate triggers
+        if self._inference_lock.locked():
+            return None
+
+        async with self._inference_lock:
+            return await self._run_inference(session)
+
+    async def _run_inference(self, session: BaselineSession) -> BaselineResponse | None:
+        """Execute one inference pass using the latest state."""
         # Get the latest RGB image
-        rgb_frame = session.state.latest_rgbd.color
-        # Save to temp file
-        img_path = Path(self._temp_dir.name) / f"frame_{session.session_id}_{int(asyncio.get_event_loop().time())}_{len(session.metadata.get('frame_history', []))}.jpg"
-        Image.fromarray(rgb_frame).save(img_path)
-        
+        rgb_frame = self._get_rgb_frame(session.state.latest_rgbd)
+        if rgb_frame is None:
+            return None
+
+        # Save image in thread pool
+        timestamp = time.time()
+        timestamp_str = f"{timestamp:.3f}".replace(".", "_")
+        img_path = Path(self._temp_dir.name) / (
+            f"frame_{session.session_id}_{timestamp_str}_"
+            f"{len(session.metadata.get('frame_history', []))}.jpg"
+        )
+
+        await asyncio.to_thread(self._save_image, rgb_frame, img_path)
+
         # Update history
         history = session.metadata.setdefault("frame_history", [])
         history.append(str(img_path))
         if len(history) > 5:
-            # Remove old file
             old_file = history.pop(0)
             try:
                 Path(old_file).unlink(missing_ok=True)
             except Exception:
                 pass
 
-        # Run solver
-        # We run this in a separate thread to avoid blocking the async loop
-        # Pass the full history
+        # Run solver in thread pool
         output = await asyncio.to_thread(self._run_solver, history)
-        
+
         # Parse output
         direct_output = output.get("direct_output", "")
-        print(f"Agent Output: {direct_output}")
-        
+        print(f"[AgentBaseline] Agent Output: {direct_output}")
+
         navigation, text_response = self._parse_output(direct_output)
-        
+
         step = Step()
 
         messages = [
             {
-                "type": "json",
-                "json_type": "NavigationCommand",
-                "content": navigation.to_dict(),
+                "type": "NavigationCommand",
+                "payload": navigation.to_dict(),
             },
             {
-                "type": "json",
-                "json_type": "Step",
-                "content": step.to_dict(),
+                "type": "Step",
+                "payload": step.to_dict(),
             }
         ]
-        
+
         if text_response:
-             messages.append({
-                "type": "json",
-                "json_type": "AgentText",
-                "content": {"text": text_response}
+            messages.append({
+                "type": "AgentText",
+                "payload": {"text": text_response}
             })
 
         return BaselineResponse(
@@ -148,9 +183,6 @@ class AgentBaseline(ClosedLoopBaseline):
 
     def _run_solver(self, image_paths: List[str]) -> Dict[str, Any]:
         navigation_task_prompt = """
-[Task]
-请描述视野中的可行动作并选出后续一连串的导航轨迹指令
-你要去面包店
 [Rules]
 要躲避物体不要撞上
 当你离人2m内的时候就可以触发问路
@@ -172,6 +204,13 @@ class AgentBaseline(ClosedLoopBaseline):
                 image_paths=image_paths,
             )
         return {}
+
+    def _save_image(self, rgb_frame: np.ndarray, img_path: Path) -> None:
+        """Save image to disk (runs in thread pool)."""
+        img = Image.fromarray(rgb_frame)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img.save(img_path, format="JPEG")
 
     def _parse_output(self, output_text: str) -> Tuple[NavigationCommand, str]:
         # Default to stop
@@ -228,8 +267,16 @@ class AgentBaseline(ClosedLoopBaseline):
         return NavigationCommand(
             LocalPositionOffset=pos_offset,
             LocalRotationOffset=rot_offset,
-            IsStopped=is_stopped
+            IsStop=is_stopped
         ), output_text
+
+    def _get_rgb_frame(self, rgbd) -> np.ndarray:
+        frame = rgbd.color
+        source = getattr(rgbd, "metadata", {}).get("source")
+        if source == "webrtc" and frame.ndim == 3 and frame.shape[-1] == 3:
+            # aiortc gives BGR; convert to RGB for downstream tools
+            return frame[..., ::-1].copy()
+        return frame
 
     def _handle_json_packet(self, session: BaselineSession, envelope: MessageEnvelope) -> None:
         packet = envelope.payload
@@ -242,6 +289,14 @@ class AgentBaseline(ClosedLoopBaseline):
                 session.metadata["transform"] = TransformData.from_dict(packet.content)
             except (KeyError, TypeError, ValueError):
                 session.metadata["transform"] = packet.content
+        elif packet.json_type == "SimulationTime":
+            # 期望 content = {"time": float}
+            try:
+                sim_time = packet.content.get("time")
+                if sim_time is not None:
+                    session.metadata["simulation_time"] = float(sim_time)
+            except (AttributeError, TypeError, ValueError):
+                pass
 
     def _ready_to_respond(self, session: BaselineSession) -> bool:
         if not self._initialized:
@@ -251,10 +306,8 @@ class AgentBaseline(ClosedLoopBaseline):
             return False
 
         packets = session.state.json_packets
-        # We wait for Instruction and TransformData as in simple_baseline, 
-        # but maybe we don't strictly need Instruction if we have a fixed task.
-        # However, to be safe and consistent with the protocol:
-        return "Instruction" in packets and "TransformData" in packets
+        # Require Init + TransformData (Instruction optional for this baseline)
+        return "TransformData" in packets
 
 
 def create_baseline() -> ClosedLoopBaseline:
