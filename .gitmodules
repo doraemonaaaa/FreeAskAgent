@@ -1,0 +1,3 @@
+[submodule "closed_loop"]
+	path = closed_loop
+	url = https://github.com/doraemonaaaa/freeaskworld_closed_loop
