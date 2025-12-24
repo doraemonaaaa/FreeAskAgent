@@ -113,7 +113,9 @@ Explore more in our [paper](https://arxiv.org/abs/2510.05592) or [project page](
 
 ### Prerequisites
 - **Python 3.11** (recommended)
-
+```
+git submodule update --init --recursive  # Download submodule
+```
 ### Installation
 ```bash
 bash setup.sh
