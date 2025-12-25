@@ -125,6 +125,8 @@ sudo apt-get update
 sudo apt-get install parallel
 ```
 
+Install Low Level Module from low_level/NavDP/README.md
+
 ### Setup Environment Variables
 Copy the `.env.template` file from `agentflow/.env.template` and rename it to `.env`, then place it in the `agentflow/` folder. Update the following variables with your own API keys:
 - `OPENAI_API_KEY` (for judging reasponse)

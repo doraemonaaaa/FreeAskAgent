@@ -8,6 +8,7 @@ from ..engine.factory import create_llm_engine
 from ..models.formatters import NextStep, QueryAnalysis
 from ..models.memory import Memory
 from ..utils.utils import get_image_info, normalize_image_paths
+from ..models_embodied.prompts.vln import VLN_PLANNER_PROMPT
 
 class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",

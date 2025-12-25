@@ -3,13 +3,13 @@ import time
 import json
 from typing import Optional, Sequence, Union
 
-from ..agentflow.embodied_models.initializer import Initializer
-from ..agentflow.embodied_models.planner import Planner
-from ..agentflow.embodied_models.verifier import Verifier
-from ..agentflow.embodied_models.memory import Memory
-from ..agentflow.embodied_models.executor import Executor
+from ..agentflow.models_embodied.initializer import Initializer
+from ..agentflow.models_embodied.planner import Planner
+from ..agentflow.models_embodied.memory import Memory
+from ..agentflow.models_embodied.executor import Executor
 from ..agentflow.utils.utils import make_json_serializable_truncated
 
+# TODO: No Tool Use
 class SolverEmbodied:
     def __init__(
         self,
@@ -38,6 +38,7 @@ class SolverEmbodied:
         self.temperature  = temperature
         assert all(output_type in ["base", "final", "direct"] for output_type in self.output_types), "Invalid output type. Supported types are 'base', 'final', 'direct'."
         self.verbose = verbose
+        
     def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None):
         """
         Solve a single problem from the benchmark dataset.
@@ -86,101 +87,6 @@ class SolverEmbodied:
                 print(f"\n==> 🔍 Step 0: Query Analysis\n")
                 print(f"{query_analysis}")
                 print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
-
-            # Main execution loop
-            step_count = 0
-            action_times = []
-            while step_count < self.max_steps and (time.time() - query_start_time) < self.max_time:
-                step_count += 1
-                step_start_time = time.time()
-
-                # [2] Generate next step
-                local_start_time = time.time()
-                next_step = self.planner.generate_next_step(
-                    question, 
-                    image_paths, 
-                    query_analysis, 
-                    self.memory, 
-                    step_count, 
-                    self.max_steps,
-                    json_data
-                )
-                context, sub_goal, tool_name = self.planner.extract_context_subgoal_and_tool(next_step)
-                if self.verbose:
-                    print(f"\n==> 🎯 Step {step_count}: Action Prediction ({tool_name})\n")
-                    print(f"[Context]: {context}\n[Sub Goal]: {sub_goal}\n[Tool]: {tool_name}")
-                    print(f"[Time]: {round(time.time() - local_start_time, 2)}s")
-
-                if tool_name is None or tool_name not in self.planner.available_tools:
-                    print(f"\n==> 🚫 Error: Tool '{tool_name}' is not available or not found.")
-                    command = "No command was generated because the tool was not found."
-                    result = "No result was generated because the tool was not found."
-
-                else:
-                    # [3] Generate the tool command
-                    local_start_time = time.time()
-                    tool_command = self.executor.generate_tool_command(
-                        question, 
-                        image_paths, 
-                        context, 
-                        sub_goal, 
-                        tool_name, 
-                        self.planner.toolbox_metadata[tool_name],
-                        step_count,
-                        json_data
-                    )
-                    analysis, explanation, command = self.executor.extract_explanation_and_command(tool_command)
-                    if self.verbose:
-                        print(f"\n==> 📝 Step {step_count}: Command Generation ({tool_name})\n")
-                        print(f"[Analysis]: {analysis}\n[Explanation]: {explanation}\n[Command]: {command}")
-                        print(f"[Time]: {round(time.time() - local_start_time, 2)}s")
-                    
-                    # [4] Execute the tool command
-                    local_start_time = time.time()
-                    result = self.executor.execute_tool_command(tool_name, command)
-                    result = make_json_serializable_truncated(result) # Convert to JSON serializable format
-                    json_data[f"tool_result_{step_count}"] = result
-
-                    if self.verbose:
-                        print(f"\n==> 🛠️ Step {step_count}: Command Execution ({tool_name})\n")
-                        print(f"[Result]:\n{json.dumps(result, indent=4)}")
-                        print(f"[Time]: {round(time.time() - local_start_time, 2)}s")
-                
-                # Track execution time for the current step
-                execution_time_step = round(time.time() - step_start_time, 2)
-                action_times.append(execution_time_step)
-
-                # Update memory
-                self.memory.add_action(step_count, tool_name, sub_goal, command, result)
-                memory_actions = self.memory.get_actions()
-
-                # [5] Verify memory (context verification)
-                local_start_time = time.time()
-                stop_verification = self.verifier.verificate_context(
-                    question,
-                    image_paths,
-                    query_analysis,
-                    self.memory,
-                    step_count,
-                    json_data
-                )
-                context_verification, conclusion = self.verifier.extract_conclusion(stop_verification)
-                if self.verbose:
-                    conclusion_emoji = "✅" if conclusion == 'STOP' else "🛑"
-                    print(f"\n==> 🤖 Step {step_count}: Context Verification\n")
-                    print(f"[Analysis]: {context_verification}\n[Conclusion]: {conclusion} {conclusion_emoji}")
-                    print(f"[Time]: {round(time.time() - local_start_time, 2)}s")
-                
-                # Break the loop if the context is verified
-                if conclusion == 'STOP':
-                    break
-
-            # Add memory and statistics to json_data
-            json_data.update({
-                "memory": memory_actions,
-                "step_count": step_count,
-                "execution_time": round(time.time() - query_start_time, 2),
-            })
 
             # Generate final output if requested
             if 'final' in self.output_types:
@@ -244,18 +150,6 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         is_multimodal=enable_multimodal
     )
 
-    # Instantiate Verifier
-    verifier = Verifier(
-        llm_engine_name=verifier_engine,
-        llm_engine_fixed_name=planner_fixed_engine,
-        toolbox_metadata=initializer.toolbox_metadata,
-        available_tools=initializer.available_tools,
-        verbose=verbose,
-        base_url=base_url if verifier_engine == llm_engine_name else None,
-        temperature=temperature,
-        is_multimodal=enable_multimodal
-    )
-
     # Instantiate Memory
     memory = Memory()
 
@@ -272,7 +166,6 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     # Instantiate Solver
     solver = SolverEmbodied(
         planner=planner,
-        verifier=verifier,
         memory=memory,
         executor=executor,
         output_types=output_types,
