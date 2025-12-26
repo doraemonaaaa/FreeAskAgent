@@ -7,7 +7,7 @@ Action Space (local frame, within 10m):
 """
 from .tom import TOM_CORE_PROMPT, build_tom_prompt
 
-def build_vln_prompt() -> str:
+def vln_prompt() -> str:
     return build_tom_prompt(VLN_TASK_PROMPT, VLN_EXAMPLES)
 
 VLN_TASK_PROMPT = """

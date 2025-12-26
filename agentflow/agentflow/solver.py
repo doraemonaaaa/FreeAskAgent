@@ -1,3 +1,21 @@
+"""
+Output Type Definitions:
+
+1. base (Base Response):
+   - Generated BEFORE any agent reasoning or tool execution.
+   - Uses only the initial query and images.
+   - Serves as a zero-shot baseline to measure model performance without tools.
+
+2. final (Detailed Solution):
+   - Generated AFTER the agent has completed all reasoning steps and tool executions.
+   - Uses the full history (memory) of actions and results.
+   - Provides a comprehensive report including summary, detailed step-by-step analysis, key findings, and conclusion.
+
+3. direct (Final Answer):
+   - Generated AFTER the agent has completed all reasoning steps (like 'final').
+   - Uses the full history (memory).
+   - Focuses on brevity, providing just the process summary and the direct answer to the query.
+"""
 import argparse
 import time
 import json

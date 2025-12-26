@@ -1,6 +1,5 @@
 # Import the solver
 import os
-import time
 from pathlib import Path
 
 from agentflow.agentflow.solver_fast import construct_fast_solver
@@ -46,11 +45,11 @@ else:
     )
 
 # Prepare an ordered image sequence so the agent can perceive motion
-frame_dir = Path("/home/pengyh/workspace/FreeAskAgent")
+frame_dir = Path("test/vln")
 # image_sequence = sorted(str(path) for path in frame_dir.glob("frame_*.jpeg"))
 image_sequence = None
 if not image_sequence:
-    image_sequence = ["/home/pengyh/workspace/FreeAskAgent/input_img1.jpg"]
+    image_sequence = ["test/vln/input_img1.jpg"]
 
 navigation_task_prompt = """"
 [Task]

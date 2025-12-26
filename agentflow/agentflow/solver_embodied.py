@@ -14,7 +14,6 @@ class SolverEmbodied:
     def __init__(
         self,
         planner,
-        verifier,
         memory,
         executor,
         output_types: str = "base,final,direct",
@@ -26,7 +25,6 @@ class SolverEmbodied:
         temperature: float = .0
     ):
         self.planner = planner
-        self.verifier = verifier
         self.memory = memory
         self.executor = executor
         self.max_steps = max_steps
@@ -64,11 +62,11 @@ class SolverEmbodied:
                     print(f"\n==> 🖼️ Received Image: {image_paths}")
 
         # Generate base response if requested
-        if 'base' in self.output_types:
-            base_response = self.planner.generate_base_response(question, image_paths, self.max_tokens)
-            json_data["base_response"] = base_response
-            if self.verbose:
-                print(f"\n==> 📝 Base Response from LLM:\n\n{base_response}")
+        # if 'base' in self.output_types:
+        #     base_response = self.planner.generate_base_response(question, image_paths, self.max_tokens)
+        #     json_data["base_response"] = base_response
+        #     if self.verbose:
+        #         print(f"\n==> 📝 Base Response from LLM:\n\n{base_response}")
 
         # If only base response is needed, save and return
         if set(self.output_types) == {'base'}:
@@ -81,18 +79,18 @@ class SolverEmbodied:
 
             # [1] Analyze query
             query_start_time = time.time()
-            query_analysis = self.planner.analyze_query(question, image_paths)
-            json_data["query_analysis"] = query_analysis
-            if self.verbose:
-                print(f"\n==> 🔍 Step 0: Query Analysis\n")
-                print(f"{query_analysis}")
-                print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
+            # query_analysis = self.planner.analyze_query(question, image_paths)
+            # json_data["query_analysis"] = query_analysis
+            # if self.verbose:
+            #     print(f"\n==> 🔍 Step 0: Query Analysis\n")
+            #     print(f"{query_analysis}")
+            #     print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
 
             # Generate final output if requested
-            if 'final' in self.output_types:
-                final_output = self.planner.generate_final_output(question, image_paths, self.memory)
-                json_data["final_output"] = final_output
-                print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
+            # if 'final' in self.output_types:
+            #     final_output = self.planner.generate_final_output(question, image_paths, self.memory)
+            #     json_data["final_output"] = final_output
+            #     print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
@@ -108,7 +106,7 @@ class SolverEmbodied:
 def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enabled_tools : list[str] = ["all"],
                      tool_engine: list[str] = ["Default"],
-                     model_engine: list[str] = ["trainable", "dashscope", "dashscope", "dashscope"],  # [planner_main, planner_fixed, verifier, executor]
+                     model_engine: list[str] = ["trainable", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
                      output_types : str = "final,direct",
                      max_steps : int = 10,
                      max_time : int = 300,
@@ -122,12 +120,11 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      ):
 
     # Parse model_engine configuration
-    # Format: [planner_main, planner_fixed, verifier, executor]
+    # Format: [planner_main, planner_fixed, executor]
     # "trainable" means use llm_engine_name (the trainable model)
     planner_main_engine = llm_engine_name if model_engine[0] == "trainable" else model_engine[0]
     planner_fixed_engine = llm_engine_name if model_engine[1] == "trainable" else model_engine[1]
-    verifier_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
-    executor_engine = llm_engine_name if model_engine[3] == "trainable" else model_engine[3]
+    executor_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
 
     # Instantiate Initializer
     initializer = Initializer(
