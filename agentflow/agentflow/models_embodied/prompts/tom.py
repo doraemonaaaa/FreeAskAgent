@@ -6,7 +6,7 @@ def build_tom_prompt(
     prompt_parts = [
         TOM_CORE_PROMPT.strip(),
         specified_task.strip(),
-        specified_examples.strip(),
+        specified_examples.strip()
     ]
 
     return "\n\n".join(prompt_parts)

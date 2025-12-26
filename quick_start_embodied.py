@@ -33,8 +33,7 @@ if not image_sequence:
     image_sequence = ["test/vln/input_img1.jpg"]
 
 navigation_task_prompt = """"
-Complete the following navigation task based on the provided image frames. 
-Analyze the visual information in the images to determine the best course of action to achieve the task.
+Go to the store, called micheal's store.
 """
 
 output = solver.solve(

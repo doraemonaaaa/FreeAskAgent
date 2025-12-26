@@ -189,14 +189,13 @@ Actions Taken:
 
 Please generate the concise output based on the query, image information, initial analysis, and actions taken. Break down the process into clear, logical, and conherent steps. Conclude with a precise and direct answer to the query.
 
-Task Prompt:
+VLN Task Principle Prompt:
 {vln_prompt()}
 
 Tools:
 Available tools: {self.available_tools}
 Metadata for the tools: {self.toolbox_metadata}
 """
-        
 
         input_data = [prompt_generate_final_output]
         image_paths = normalize_image_paths(image)
