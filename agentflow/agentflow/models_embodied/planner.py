@@ -9,6 +9,7 @@ from ..models.formatters import NextStep, QueryAnalysis
 from ..models.memory import Memory
 from ..utils.utils import get_image_info, normalize_image_paths
 from ..models_embodied.prompts.vln import vln_prompt
+from ..models_embodied.prompts.query_analysis import QuerynalysisPrompt
 
 class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
@@ -110,71 +111,28 @@ class Planner:
 
         return context, sub_goal, tool_name
     
-#     def analyze_query(self, question: str, image: str) -> str:
-#         image_info = get_image_info(image)
+    def analyze_query(self, question: str, image: str) -> str:
+        image_info = get_image_info(image)
 
-#         if self.is_multimodal:
-#             query_prompt = f"""
-# Task: Analyze the given query with accompanying inputs and determine the skills and tools needed to address it effectively.
+        query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info)
+        input_data = [query_prompt]
+        
+        image_paths = normalize_image_paths(image)
+        for path in image_paths:
+            try:
+                with open(path, 'rb') as file:
+                    image_bytes = file.read()
+                input_data.append(image_bytes)
+            except Exception as e:
+                print(f"Error reading image file '{path}': {str(e)}")
 
-# Available tools: {self.available_tools}
+        print("Input data of `analyze_query()`: ", self.summarize_input_data(input_data))
 
-# Metadata for the tools: {self.toolbox_metadata}
+        # self.query_analysis = self.llm_engine_mm(input_data, response_format=QueryAnalysis)
+        # self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)
+        self.query_analysis = self.llm_engine_fixed(input_data, response_format=QueryAnalysis)
 
-# Image: {image_info}
-
-# Query: {question}
-
-# Instructions:
-# 1. Carefully read and understand the query and any accompanying inputs.
-# 2. Identify the main objectives or tasks within the query.
-# 3. List the specific skills that would be necessary to address the query comprehensively.
-# 4. Examine the available tools in the toolbox and determine which ones might relevant and useful for addressing the query. Make sure to consider the user metadata for each tool, including limitations and potential applications (if available).
-# 5. Provide a brief explanation for each skill and tool you've identified, describing how it would contribute to answering the query.
-
-# Your response should include:
-# 1. A concise summary of the query's main points and objectives, as well as content in any accompanying inputs.
-# 2. A list of required skills, with a brief explanation for each.
-# 3. A list of relevant tools from the toolbox, with a brief explanation of how each tool would be utilized and its potential limitations.
-# 4. Any additional considerations that might be important for addressing the query effectively.
-
-# Please present your analysis in a clear, structured format.
-#                         """
-#         else: 
-#             query_prompt = f"""
-# Task: Analyze the given query to determine necessary skills and tools.
-
-# Inputs:
-# - Query: {question}
-# - Available tools: {self.available_tools}
-# - Metadata for tools: {self.toolbox_metadata}
-
-# Instructions:
-# 1. Identify the main objectives in the query.
-# 2. List the necessary skills and tools.
-# 3. For each skill and tool, explain how it helps address the query.
-# 4. Note any additional considerations.
-
-# Format your response with a summary of the query, lists of skills and tools with explanations, and a section for additional considerations.
-
-# Be biref and precise with insight. 
-# """
-#         input_data = [query_prompt]
-#         if image_info:
-#             try:
-#                 with open(image_info["image_path"], 'rb') as file:
-#                     image_bytes = file.read()
-#                 input_data.append(image_bytes)
-#             except Exception as e:
-#                 print(f"Error reading image file: {str(e)}")
-
-#         print("Input data of `analyze_query()`: ", input_data)
-
-#         # self.query_analysis = self.llm_engine_mm(input_data, response_format=QueryAnalysis)
-#         # self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)
-#         self.query_analysis = self.llm_engine_fixed(input_data, response_format=QueryAnalysis)
-
-#         return str(self.query_analysis).strip()
+        return str(self.query_analysis).strip()
 
     def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
         image_info = get_image_info(image)
@@ -186,8 +144,6 @@ Image: {image_info}
 
 Actions Taken:
 {memory.get_actions()}
-
-Please generate the concise output based on the query, image information, initial analysis, and actions taken. Break down the process into clear, logical, and conherent steps. Conclude with a precise and direct answer to the query.
 
 VLN Task Principle Prompt:
 {vln_prompt()}

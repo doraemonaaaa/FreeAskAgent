@@ -140,7 +140,7 @@ Be biref and precise with insight.
             except Exception as e:
                 print(f"Error reading image file: {str(e)}")
 
-        print("Input data of `analyze_query()`: ", input_data)
+        print("Input data of `analyze_query()`: ", self.summarize_input_data(input_data))
 
         # self.query_analysis = self.llm_engine_mm(input_data, response_format=QueryAnalysis)
         # self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)

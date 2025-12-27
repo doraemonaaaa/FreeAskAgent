@@ -1,10 +1,9 @@
-
-def build_tom_prompt(
+def build_tom_specified_task_prompt(
     specified_task: str,
     specified_examples: str = "",
 ) -> str:
     prompt_parts = [
-        TOM_CORE_PROMPT.strip(),
+        f"Planning principles:\n{TOM_CORE_PROMPT.strip()}",
         specified_task.strip(),
         specified_examples.strip()
     ]
