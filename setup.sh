@@ -77,4 +77,11 @@ echo "Setting up SAM2 Tool..."
 uv pip install git+https://github.com/facebookresearch/sam2.git
 
 # Grounded SAM2 Tool setup
+echo "Setting up Grounded SAM2 Tool..."
 uv pip install groundingdino-py sam-2
+
+# Map setup
+echo "Setting up Map dependencies..."
+uv pip install open3d
+uv pip install numpy-quaternion
+uv pip install pathfinding

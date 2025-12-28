@@ -60,15 +60,15 @@ State Transition Logic (Review "Actions Taken"):
 
 Output Format (STRICT):
 
-Description: A concise summary of observed visual events and dialogue.
+**Description**: A concise summary of observed visual events and dialogue.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: Analyze "Actions Taken". Have I tried this before? Am I stuck in a loop?
 - Current State: [Navigating | Exploration]
 - Sub-Strategy: [None | Self-Exploration | Ask-Strategy] (Only for Exploration)
 - Rationale: Explain the choice of strategy based on history and current observation.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 - Do I know the target location?
@@ -112,15 +112,15 @@ User says: "I left my phone on the sofa."
 The sofa is visible 3 meters ahead, slightly right.
 
 Output:
-Description: The user states the phone is on the sofa. The sofa is visible.
+**Description**: The user states the phone is on the sofa. The sofa is visible.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: Start of task.
 - Current State: Navigating
 - Sub-Strategy: None
 - Rationale: Target is visible.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 The user believes the phone is on the sofa. I can see the sofa and share this belief.
@@ -147,15 +147,15 @@ User says: "Find the coffee shop."
 I am on a street. I see buildings on both sides but cannot identify a coffee shop ahead.
 
 Output:
-Description: User wants a coffee shop. Current view shows generic buildings.
+**Description**: User wants a coffee shop. Current view shows generic buildings.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: Start of task.
 - Current State: Exploration
 - Sub-Strategy: Self-Exploration
 - Rationale: Moving forward blindly might miss the shop if it's on the side. Scanning is safer.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 I don't know where the coffee shop is. It might be on my left or right.
@@ -184,15 +184,15 @@ I am standing next to a human (1.5m away). I don't see the key.
 Actions Taken: [Move(5.0, 0.0, 0.0)] (Approached the human)
 
 Output:
-Description: User asks for key. Key not visible. Human is nearby.
+**Description**: User asks for key. Key not visible. Human is nearby.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: Successfully approached the human (previous action).
 - Current State: Exploration
 - Sub-Strategy: Ask-Strategy
 - Rationale: Human is now close enough to ask immediately.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 I don't know where the key is.
@@ -220,15 +220,15 @@ User says: "Wait here for 5 seconds."
 I am standing in the hallway.
 
 Output:
-Description: The user asked me to wait.
+**Description**: The user asked me to wait.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: User command.
 - Current State: Navigating
 - Sub-Strategy: None
 - Rationale: User explicitly asked to wait.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 The user wants me to stay put for a short duration.
@@ -255,15 +255,15 @@ User says: "Go to the kitchen"
 I reached the kitchen.
 
 Output:
-Description: User wants me to go to the kitchen. Current view and memory shows I am reaching the kitchen.
+**Description**: User wants me to go to the kitchen. Current view and memory shows I am reaching the kitchen.
 
-Strategy Analysis:
+**Strategy Analysis**:
 - History Review: User command.
 - Current State: Navigating
 - Sub-Strategy: None
 - Rationale: User explicitly asked me to go to the kitchen.
 
-Theory of Mind-Reasoning:
+**Theory of Mind-Reasoning**:
 
 <<Robot Belief>>:
 I need to go to the kitchen.
@@ -282,5 +282,5 @@ I checked that I am closed enough to the kitchen. The task is completed. Execute
 <Stop>
 """
 
-
-print(vln_prompt())
+if __name__ == "__main__":
+  print(vln_prompt())
