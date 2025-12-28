@@ -129,8 +129,8 @@ class Planner:
         print("Input data of `analyze_query()`: ", self.summarize_input_data(input_data))
 
         # self.query_analysis = self.llm_engine_mm(input_data, response_format=QueryAnalysis)
-        # self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)
-        self.query_analysis = self.llm_engine_fixed(input_data, response_format=QueryAnalysis)
+        self.query_analysis = self.llm_engine(input_data, response_format=QueryAnalysis)
+        # self.query_analysis = self.llm_engine_fixed(input_data, response_format=QueryAnalysis)
 
         return str(self.query_analysis).strip()
 
@@ -171,8 +171,8 @@ Metadata for the tools: {self.toolbox_metadata}
             except Exception as e:
                 print(f"Error reading image file '{path}': {str(e)}")
 
-        # final_output = self.llm_engine(input_data)
-        final_output = self.llm_engine_fixed(input_data)
+        final_output = self.llm_engine(input_data)
+        # final_output = self.llm_engine_fixed(input_data)
         # final_output = self.llm_engine_mm(input_data)
 
         return final_output
