@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..engine.factory import create_llm_engine
-from ..models.formatters import NextStep, QueryAnalysis
-from ..models.memory import Memory
+from ..models_embodied.formatters import NextStep, QueryAnalysis
+from ..models_embodied.memory import Memory
 from ..utils.utils import get_image_info, normalize_image_paths
 from ..models_embodied.prompts.vln import vln_prompt
 from ..models_embodied.prompts.query_analysis import QuerynalysisPrompt
