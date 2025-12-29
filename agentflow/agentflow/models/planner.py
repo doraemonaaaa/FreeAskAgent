@@ -13,7 +13,8 @@ class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
                  toolbox_metadata: dict = None, available_tools: List = None,
                  verbose: bool = False, base_url: str = None, is_multimodal: bool = False,
-                 check_model: bool = True, temperature : float = .0):
+                 check_model: bool = True, temperature : float = .0,
+                 use_amem: bool = True, retriever_config: dict = None):
         self.llm_engine_name = llm_engine_name
         self.llm_engine_fixed_name = llm_engine_fixed_name
         self.is_multimodal = is_multimodal
@@ -33,6 +34,119 @@ class Planner:
         self.available_tools = available_tools if available_tools is not None else []
 
         self.verbose = verbose
+
+        # A-MEM集成
+        self.use_amem = use_amem
+        self.retriever_config = retriever_config or {}
+        self.retriever = None
+        self.historical_memories = []
+
+        # 初始化A-MEM检索器
+        if self.use_amem:
+            self._init_amem_retriever()
+
+    def _init_amem_retriever(self):
+        """初始化A-MEM检索器用于历史记忆检索"""
+        try:
+            from ..models.memory.hybrid_retriever import HybridRetriever
+
+            self.retriever = HybridRetriever(
+                use_api_embedding=self.retriever_config.get('use_api_embedding', True),
+                alpha=self.retriever_config.get('alpha', 0.5)
+            )
+
+            # 加载历史记忆数据（如果有的话）
+            self._load_historical_memories()
+
+            if self.verbose:
+                print("✅ Planner A-MEM retriever initialized successfully")
+
+        except ImportError as e:
+            if self.verbose:
+                print(f"⚠️  A-MEM retriever not available: {e}")
+            self.use_amem = False
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Failed to initialize A-MEM retriever: {e}")
+            self.use_amem = False
+
+    def _load_historical_memories(self):
+        """加载历史记忆数据用于检索"""
+        # 这里可以从配置文件或数据库加载历史记忆
+        # 暂时初始化为空列表，之后可以通过add_historical_memory方法添加
+        self.historical_memories = []
+
+        # 如果有持久化的记忆文件，可以在这里加载
+        # 例如：从agentic_memory_system加载共享的记忆
+        pass
+
+    def add_historical_memory(self, memory_content: str):
+        """添加历史记忆到检索器"""
+        if self.use_amem and self.retriever and memory_content:
+            try:
+                self.historical_memories.append(memory_content)
+                self.retriever.add_documents([memory_content])
+                if self.verbose:
+                    print(f"✅ Added historical memory to planner retriever")
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️  Failed to add historical memory: {e}")
+
+    def _retrieve_relevant_memories(self, query: str, k: int = 3) -> List[str]:
+        """
+        检索相关历史记忆
+
+        Args:
+            query: 查询字符串（通常是当前任务描述）
+            k: 返回的记忆数量
+
+        Returns:
+            List[str]: 相关记忆内容的列表
+        """
+        if not self.use_amem or not self.retriever:
+            return []
+
+        try:
+            # 执行混合检索
+            indices = self.retriever.retrieve(query, k=k)
+
+            # 转换索引为记忆内容
+            relevant_memories = []
+            for idx in indices:
+                if 0 <= idx < len(self.historical_memories):
+                    memory_content = self.historical_memories[idx]
+                    relevant_memories.append(memory_content)
+
+            if self.verbose and relevant_memories:
+                print(f"📚 Retrieved {len(relevant_memories)} relevant memories for query: '{query[:50]}...'")
+
+            return relevant_memories
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Memory retrieval failed: {e}")
+            return []
+
+    def _format_memories_for_prompt(self, memories: List[str]) -> str:
+        """
+        将记忆格式化为适合注入prompt的形式
+
+        Args:
+            memories: 记忆内容列表
+
+        Returns:
+            str: 格式化的记忆字符串
+        """
+        if not memories:
+            return ""
+
+        formatted_memories = []
+        for i, memory in enumerate(memories, 1):
+            # 截断过长的记忆以避免prompt过长
+            truncated_memory = memory[:200] + "..." if len(memory) > 200 else memory
+            formatted_memories.append(f"{i}. {truncated_memory}")
+
+        return "\n".join(formatted_memories)
     
     # 调试输出：只打印安全的元信息，不输出原始字节
     def summarize_input_data(self, items):
@@ -214,6 +328,9 @@ Be biref and precise with insight.
         return context, sub_goal, tool_name
 
     def generate_next_step(self, question: str, image: str, query_analysis: str, memory: Memory, step_count: int, max_step_count: int, json_data: Any = None) -> Any:
+        # 检索相关历史记忆
+        relevant_memories = self._retrieve_relevant_memories(question, k=3)
+        formatted_memories = self._format_memories_for_prompt(relevant_memories)
         if self.is_multimodal:
             prompt_generate_next_step = f"""
 Task: Determine the optimal next step to address the given query based on the provided analysis, available tools, and previous steps taken.
@@ -231,6 +348,9 @@ Tool Metadata:
 
 Previous Steps and Their Results:
 {memory.get_actions()}
+
+Relevant Historical Memories:
+{formatted_memories}
 
 Current Step: {step_count} in {max_step_count} steps
 Remaining Steps: {max_step_count - step_count}
@@ -295,6 +415,7 @@ Context:
 - **Available Tools:** {self.available_tools}
 - **Toolbox Metadata:** {self.toolbox_metadata}
 - **Previous Steps:** {memory.get_actions()}
+- **Relevant Historical Memories:** {formatted_memories}
 
 Instructions:
 1. Analyze the query, previous steps, and available tools.

@@ -213,6 +213,8 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
                      base_url : str = None,
                      temperature: float = 0.0,
                      enable_multimodal: Optional[bool] = None,
+                     use_amem: bool = True,  # 新增：启用A-MEM功能
+                     retriever_config: dict = None,  # 新增：检索器配置
                      ):
 
     # Parse model_engine configuration
@@ -232,7 +234,7 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
         vllm_config_path=vllm_config_path,
     )
 
-    # Instantiate Planner
+    # Instantiate Planner (with A-MEM integration)
     planner = Planner(
         llm_engine_name=planner_main_engine,
         llm_engine_fixed_name=planner_fixed_engine,
@@ -241,10 +243,12 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
         verbose=verbose,
         base_url=base_url,
         temperature=temperature,
-        is_multimodal=enable_multimodal
+        is_multimodal=enable_multimodal,
+        use_amem=use_amem,
+        retriever_config=retriever_config
     )
 
-    # Instantiate Verifier
+    # Instantiate Verifier (with A-MEM integration)
     verifier = Verifier(
         llm_engine_name=verifier_engine,
         llm_engine_fixed_name=planner_fixed_engine,
@@ -253,11 +257,17 @@ def construct_solver(llm_engine_name : str = "gpt-4o",
         verbose=verbose,
         base_url=base_url if verifier_engine == llm_engine_name else None,
         temperature=temperature,
-        is_multimodal=enable_multimodal
+        is_multimodal=enable_multimodal,
+        use_amem=use_amem,
+        retriever_config=retriever_config
     )
 
-    # Instantiate Memory
-    memory = Memory()
+    # Instantiate Memory (with A-MEM integration)
+    from ..agentflow.models.agentic_memory_system import AgenticMemorySystem
+    memory = AgenticMemorySystem(
+        use_amem=use_amem,
+        retriever_config=retriever_config
+    )
 
     # Instantiate Executor with tool instances cache
     executor = Executor(

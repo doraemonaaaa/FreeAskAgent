@@ -57,7 +57,7 @@ class HybridRetriever:
     支持动态添加文档、持久化存储和多种检索策略。
     """
 
-    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', alpha: float = 0.5, use_api_embedding: bool = None):
+    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', alpha: float = 0.5, use_api_embedding: bool = None, local_model_path: str = None):
         """
         初始化混合检索器
 
@@ -65,6 +65,7 @@ class HybridRetriever:
             model_name: SentenceTransformer模型名称或API模型名称
             alpha: BM25和语义搜索的权重平衡 (0.0=纯BM25, 1.0=纯语义)
             use_api_embedding: 是否使用API嵌入，None表示自动检测
+            local_model_path: 本地模型路径，如果提供则使用本地模型而不是从Hugging Face下载
         """
         # 加载环境变量
         if DOTENV_AVAILABLE:
@@ -72,6 +73,7 @@ class HybridRetriever:
 
         self.model_name = model_name
         self.alpha = alpha
+        self.local_model_path = local_model_path
         self.bm25 = None
         self.corpus = []
         self.embeddings = None
@@ -122,11 +124,16 @@ class HybridRetriever:
             # 使用本地SentenceTransformer模型
             if SENTENCE_TRANSFORMERS_AVAILABLE and SKLEARN_AVAILABLE:
                 try:
-                    # 设置较短的超时时间，避免长时间等待
-                    import requests
-                    requests.adapters.DEFAULT_RETRIES = 1
-                    self.model = SentenceTransformer(self.model_name, cache_folder=os.path.expanduser("~/.cache/huggingface"))
-                    print(f"Local embedding model initialized: {self.model_name}")
+                    # 如果提供了本地模型路径，使用本地路径
+                    if self.local_model_path and os.path.exists(self.local_model_path):
+                        self.model = SentenceTransformer(self.local_model_path)
+                        print(f"Local embedding model initialized from local path: {self.local_model_path}")
+                    else:
+                        # 设置较短的超时时间，避免长时间等待
+                        import requests
+                        requests.adapters.DEFAULT_RETRIES = 1
+                        self.model = SentenceTransformer(self.model_name, cache_folder=os.path.expanduser("~/.cache/huggingface"))
+                        print(f"Local embedding model initialized: {self.model_name}")
                 except Exception as e:
                     print(f"Warning: Failed to load SentenceTransformer model: {e}")
                     print("  This may be due to network issues or missing dependencies")

@@ -122,12 +122,11 @@ class Initializer:
         #     self.setup_vllm_server()
 
     def get_project_root(self):
+        # For this specific setup, return the agentflow/agentflow directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        while current_dir != '/':
-            if os.path.exists(os.path.join(current_dir, 'agentflow')):
-                return os.path.join(current_dir, 'agentflow')
-            current_dir = os.path.dirname(current_dir)
-        raise Exception("Could not find project root")
+        # Go up one level to get to agentflow/agentflow
+        agentflow_dir = os.path.dirname(current_dir)
+        return agentflow_dir
 
     def build_tool_name_mapping(self, tools_dir: str) -> Dict[str, Dict[str, str]]:
         """
@@ -270,9 +269,9 @@ class Initializer:
         agentflow_dir = self.get_project_root()
         tools_dir = os.path.join(agentflow_dir, 'tools')
 
-        # Add the agentflow directory and its parent to the Python path
-        sys.path.insert(0, agentflow_dir)
-        sys.path.insert(0, os.path.dirname(agentflow_dir))
+        # Add only the agentflow directory to the Python path
+        if agentflow_dir not in sys.path:
+            sys.path.insert(0, agentflow_dir)
         print(f"Updated Python path: {sys.path}")
 
         if not os.path.exists(tools_dir):

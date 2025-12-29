@@ -8,3 +8,12 @@ from .reward import reward
 from .server import AgentFlowServer
 from .trainer import Trainer
 from .types import *
+
+# Import subpackage for convenience
+from . import agentflow as _agentflow
+# Re-export key classes from subpackage
+from .agentflow import Memory, AgenticMemorySystem, Planner, Verifier
+
+# Create models attribute for convenience
+import sys
+sys.modules['agentflow.models'] = sys.modules['agentflow.agentflow.models']

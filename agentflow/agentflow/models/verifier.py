@@ -14,7 +14,8 @@ class Verifier:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
                  toolbox_metadata: dict = None, available_tools: list = None,
                  verbose: bool = False, base_url: str = None, is_multimodal: bool = False,
-                 check_model: bool = True, temperature: float = .0):
+                 check_model: bool = True, temperature: float = .0,
+                 use_amem: bool = True, retriever_config: dict = None):
         self.llm_engine_name = llm_engine_name
         self.llm_engine_fixed_name = llm_engine_fixed_name
         self.is_multimodal = is_multimodal
@@ -33,8 +34,122 @@ class Verifier:
         self.available_tools = available_tools if available_tools is not None else []
         self.verbose = verbose
 
+        # A-MEM集成
+        self.use_amem = use_amem
+        self.retriever_config = retriever_config or {}
+        self.retriever = None
+        self.verification_memories = []
+
+        # 初始化A-MEM检索器
+        if self.use_amem:
+            self._init_amem_retriever()
+
+    def _init_amem_retriever(self):
+        """初始化A-MEM检索器用于验证辅助"""
+        try:
+            from ..models.memory.hybrid_retriever import HybridRetriever
+
+            self.retriever = HybridRetriever(
+                use_api_embedding=self.retriever_config.get('use_api_embedding', True),
+                alpha=self.retriever_config.get('alpha', 0.5)
+            )
+
+            # 加载验证相关的历史记忆
+            self._load_verification_memories()
+
+            if self.verbose:
+                print("✅ Verifier A-MEM retriever initialized successfully")
+
+        except ImportError as e:
+            if self.verbose:
+                print(f"⚠️  A-MEM retriever not available: {e}")
+            self.use_amem = False
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Failed to initialize A-MEM retriever: {e}")
+            self.use_amem = False
+
+    def _load_verification_memories(self):
+        """加载验证相关的历史记忆"""
+        # 这里可以加载之前验证成功的案例、失败的教训等
+        self.verification_memories = []
+        pass
+
+    def add_verification_memory(self, verification_case: str):
+        """添加验证记忆到检索器"""
+        if self.use_amem and self.retriever and verification_case:
+            try:
+                self.verification_memories.append(verification_case)
+                self.retriever.add_documents([verification_case])
+                if self.verbose:
+                    print(f"✅ Added verification memory to verifier retriever")
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️  Failed to add verification memory: {e}")
+
+    def _get_similar_historical_verifications(self, current_context: str, k: int = 2) -> List[str]:
+        """
+        获取历史上类似的验证案例
+
+        Args:
+            current_context: 当前验证上下文（问题+分析+当前步骤）
+            k: 返回的验证案例数量
+
+        Returns:
+            List[str]: 相关的历史验证案例
+        """
+        if not self.use_amem or not self.retriever:
+            return []
+
+        try:
+            # 使用当前上下文检索相关验证历史
+            indices = self.retriever.retrieve(current_context, k=k)
+
+            # 转换索引为验证案例内容
+            similar_cases = []
+            for idx in indices:
+                if 0 <= idx < len(self.verification_memories):
+                    verification_case = self.verification_memories[idx]
+                    similar_cases.append(verification_case)
+
+            if self.verbose and similar_cases:
+                print(f"📋 Retrieved {len(similar_cases)} similar verification cases")
+
+            return similar_cases
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Historical verification retrieval failed: {e}")
+            return []
+
+    def _format_verification_memories_for_prompt(self, memories: List[str]) -> str:
+        """
+        将验证记忆格式化为适合注入prompt的形式
+
+        Args:
+            memories: 验证记忆内容列表
+
+        Returns:
+            str: 格式化的验证记忆字符串
+        """
+        if not memories:
+            return "No relevant historical verification cases found."
+
+        formatted_memories = []
+        for i, memory in enumerate(memories, 1):
+            # 截断过长的记忆
+            truncated_memory = memory[:300] + "..." if len(memory) > 300 else memory
+            formatted_memories.append(f"Case {i}: {truncated_memory}")
+
+        return "Relevant historical verification cases:\n" + "\n".join(formatted_memories)
+
     def verificate_context(self, question: str, image: str, query_analysis: str, memory: Memory, step_count: int = 0, json_data: Any = None) -> Any:
         image_info = get_image_info(image)
+
+        # 检索相关历史验证案例
+        current_verification_context = f"Query: {question}, Analysis: {query_analysis}, Actions: {memory.get_actions()}"
+        similar_verifications = self._get_similar_historical_verifications(current_verification_context, k=2)
+        formatted_verifications = self._format_verification_memories_for_prompt(similar_verifications)
         if self.is_multimodal:
             prompt_memory_verification = f"""
 Task: Thoroughly evaluate the completeness and accuracy of the memory for fulfilling the given query, considering the potential need for additional tool usage.
@@ -46,6 +161,9 @@ Available Tools: {self.available_tools}
 Toolbox Metadata: {self.toolbox_metadata}
 Initial Analysis: {query_analysis}
 Memory (tools used and results): {memory.get_actions()}
+
+Historical Verification Cases:
+{formatted_verifications}
 
 Detailed Instructions:
 1. Carefully analyze the query, initial analysis, and image (if provided):
@@ -107,6 +225,7 @@ Context:
 - **Toolbox Metadata:** {self.toolbox_metadata}
 - **Initial Analysis:** {query_analysis}
 - **Memory (Tools Used & Results):** {memory.get_actions()}
+- **Historical Verification Cases:** {formatted_verifications}
 
 Instructions:
 1.  Review the query, initial analysis, and memory.

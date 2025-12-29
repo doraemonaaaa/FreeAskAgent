@@ -3,9 +3,9 @@ import sys
 import wikipedia
 from pydantic import BaseModel
 
-from agentflow.tools.base import BaseTool
-from agentflow.engine.factory import create_llm_engine
-from agentflow.tools.web_search.tool import Web_Search_Tool
+from agentflow.agentflow.tools.base import BaseTool
+from agentflow.agentflow.engine.factory import create_llm_engine
+from agentflow.agentflow.tools.web_search.tool import Web_Search_Tool
 
 # from web_rag import Web_Search_Tool
 # from agentflow.tools.web_search.tool import Web_Search_Tool # NOTE: Shall be used in the future

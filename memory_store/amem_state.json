@@ -1,0 +1,37 @@
+{
+  "long_term_memories": [],
+  "memory_metadata": [],
+  "stats": {
+    "total_memories": 0,
+    "retrieval_count": 5,
+    "avg_retrieval_time": 10.814342594146728,
+    "last_save_time": null,
+    "amem_enabled": true,
+    "performance_metrics": {
+      "retrieval_times": [
+        12.4755277633667,
+        11.565582513809204,
+        12.820156335830688,
+        8.14125108718872,
+        9.06919527053833
+      ],
+      "memory_usage": [],
+      "error_count": 0,
+      "success_rate": 1.0
+    },
+    "memory_types": {
+      "navigation_experience": 1,
+      "social_interaction": 1,
+      "obstacle_avoidance": 1,
+      "path_validation": 1
+    },
+    "retrieval_patterns": {
+      "865": 1,
+      "247": 1,
+      "555": 1,
+      "622": 1,
+      "853": 1
+    }
+  },
+  "retriever_config": {}
+}
