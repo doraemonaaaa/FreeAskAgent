@@ -1,0 +1,22 @@
+# A-MEM (Agentic Memory) dependencies
+# Core ML/AI libraries
+numpy>=1.24.3
+sentence-transformers>=3.4.1
+scikit-learn>=1.6.1
+torch>=2.4.0
+transformers>=4.46.3
+nltk>=3.9.1
+rank-bm25>=0.2.2
+
+# LLM API clients (compatible with AgentFlow)
+openai>=1.61.1  # AgentFlow uses 1.75.0, we'll use compatible version
+litellm>=1.59.1
+ollama>=0.3.3
+
+# Utilities (compatible with AgentFlow)
+python-dotenv>=1.0.1  # Same version as AgentFlow
+tqdm>=4.66.1
+pandas>=2.2.3
+
+# Additional dependencies for A-MEM functionality
+pathlib>=1.0.1
