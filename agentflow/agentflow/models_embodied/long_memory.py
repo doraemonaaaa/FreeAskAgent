@@ -177,9 +177,11 @@ class LongMemory:
             }
             self.memory_metadata.append(full_metadata)
 
-            # 更新检索器 - 使用add_document追加而不是add_documents替换
+            # 更新检索器 - 重新构建索引以确保一致性
             if self.retriever:
-                self.retriever.add_document(processed_content)
+                # 由于BM25和embeddings需要重新计算，我们重新构建整个索引
+                self.retriever.add_documents(self.long_term_memories)
+                self.logger.debug(f"Rebuilt retriever index with {len(self.long_term_memories)} documents")
 
             # 更新统计信息
             self.stats['total_memories'] += 1
@@ -229,6 +231,7 @@ class LongMemory:
             self.logger.debug(f"Building results from {len(indices)} indices")
             self.logger.debug(f"long_term_memories length: {len(self.long_term_memories)}")
             self.logger.debug(f"memory_metadata length: {len(self.memory_metadata)}")
+            self.logger.debug(f"retriever corpus length: {len(self.retriever.corpus) if self.retriever and hasattr(self.retriever, 'corpus') else 'no corpus'}")
             results = []
             for idx in indices:
                 self.logger.debug(f"Processing index {idx}, valid range: 0-{len(self.long_term_memories)-1}")
@@ -241,31 +244,34 @@ class LongMemory:
                         'metadata': metadata,
                         'index': idx
                     })
+                    self.logger.debug(f"Added result {len(results)-1}: {memory_content[:50]}...")
                 else:
                     self.logger.warning(f"Invalid index {idx} (valid range: 0-{len(self.long_term_memories)-1})")
 
-            # 更新统计信息
-            retrieval_time = time.time() - start_time
-            self.stats['retrieval_count'] += 1
-            self.stats['retrieval_patterns'][query_hash] += 1
+            try:
+                # 更新统计信息
+                retrieval_time = time.time() - start_time
+                self.stats['retrieval_count'] += 1
+                self.stats['retrieval_patterns'][query_hash] += 1
 
-            # 更新性能指标
-            perf = self.stats['performance_metrics']
-            perf['retrieval_times'].append(retrieval_time)
+                # 更新性能指标
+                perf = self.stats['performance_metrics']
+                perf['retrieval_times'].append(retrieval_time)
 
-            # 保持最近100个检索时间的记录
-            if len(perf['retrieval_times']) > 100:
-                perf['retrieval_times'] = perf['retrieval_times'][-100:]
+                # 保持最近100个检索时间的记录
+                if len(perf['retrieval_times']) > 100:
+                    perf['retrieval_times'] = perf['retrieval_times'][-100:]
 
-            # 更新平均时间
-            self.stats['avg_retrieval_time'] = sum(perf['retrieval_times']) / len(perf['retrieval_times'])
+                # 更新平均时间
+                self.stats['avg_retrieval_time'] = sum(perf['retrieval_times']) / len(perf['retrieval_times'])
 
-            # 计算成功率
-            if perf['retrieval_times']:
-                perf['success_rate'] = (len(perf['retrieval_times']) - perf['error_count']) / len(perf['retrieval_times'])
+                # 计算成功率
+                if perf['retrieval_times']:
+                    perf['success_rate'] = (len(perf['retrieval_times']) - perf['error_count']) / len(perf['retrieval_times'])
 
-            self.logger.info(".3f"
-                           f"memories_found={len(results)}")
+                self.logger.info(f"Retrieval completed in {retrieval_time:.3f}s, memories_found={len(results)}")
+            except Exception as stats_e:
+                self.logger.error(f"Error updating stats: {stats_e}")
 
             return results
 

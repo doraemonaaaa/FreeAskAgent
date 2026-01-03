@@ -208,24 +208,18 @@ class HybridRetriever:
             self.corpus.append(document)
             self.document_ids[document] = doc_idx
 
-            # 更新BM25索引
-            if self.bm25_available and self.bm25:
-                tokenized_doc = self._simple_tokenize(document.lower())
-                self.bm25.add_document(tokenized_doc)
+            # 更新BM25索引 - BM25不支持动态添加，需要重建索引
+            if self.bm25_available:
+                # 重新构建整个BM25索引
+                tokenized_docs = [self._simple_tokenize(doc.lower()) for doc in self.corpus]
+                self.bm25 = BM25Okapi(tokenized_docs)
 
-            # 更新语义嵌入
-            if self.semantic_available and self.embeddings is not None:
+            # 更新语义嵌入 - 需要重新计算所有文档的嵌入以保持一致性
+            if self.semantic_available:
                 if self.use_api_embedding:
-                    doc_embedding = self._get_api_embedding([document])
+                    self.embeddings = self._get_api_embedding(self.corpus)
                 elif self.model:
-                    doc_embedding = self.model.encode([document])
-                self.embeddings = np.vstack([self.embeddings, doc_embedding])
-            elif self.semantic_available and self.embeddings is None:
-                # 第一个文档
-                if self.use_api_embedding:
-                    self.embeddings = self._get_api_embedding([document])
-                elif self.model:
-                    self.embeddings = self.model.encode([document])
+                    self.embeddings = self.model.encode(self.corpus)
 
             return True
 
