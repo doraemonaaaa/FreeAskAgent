@@ -15,8 +15,6 @@ from typing import Dict, Any, Optional
 sys.path.append('/root/autodl-tmp/FreeAskAgent')
 
 from agentflow.agentflow.solver_embodied import construct_solver_embodied
-from agentflow.agentflow.models_embodied.short_memory import ShortMemory
-from agentflow.agentflow.models_embodied.long_memory import LongMemory
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="agentflow/.env")
@@ -60,8 +58,15 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
         print(f"⚠️ Frame directory {frame_dir} not found")
         return None
 
-    # 构造solver
+    # 构造solver（现在包含记忆系统）
     print("🏗️ Constructing solver...")
+    memory_config = {
+        'retriever_config': {'use_api_embedding': True},
+        'storage_dir': "./memory_store",
+        'enable_persistence': True,
+        'max_memories': 1000
+    } if enable_memory else None
+
     solver = construct_solver_embodied(
         llm_engine_name=llm_engine_name,
         enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
@@ -70,7 +75,9 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
         output_types="direct",
         max_time=300,
         max_steps=1,
-        enable_multimodal=True
+        enable_multimodal=True,
+        enable_memory=enable_memory,
+        memory_config=memory_config
     )
 
     # 导航任务提示
@@ -79,24 +86,8 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
     print(f"🎯 Task: {navigation_task_prompt}")
     print(f"🖼️ Using {len(image_sequence)} image(s)")
 
-    # 如果启用记忆，初始化记忆系统
     if enable_memory:
-        print("🧠 Initializing memory systems...")
-        short_memory = ShortMemory()
-        long_memory = LongMemory(
-            use_amem=True,
-            retriever_config={'use_api_embedding': True}
-        )
-
-        # 将任务信息添加到短期记忆
-        short_memory.set_query(navigation_task_prompt)
-
-        # 添加一些相关的记忆内容
-        long_memory.add_memory(
-            f"Navigation task: {navigation_task_prompt}. Looking for Michael's store in the environment.",
-            "navigation_task"
-        )
-        print("✅ Memory systems initialized and populated")
+        print("✅ Memory system integrated into solver")
 
     # 执行导航任务
     print("🚀 Executing navigation task...")
@@ -105,6 +96,7 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
         output = solver.solve(
             navigation_task_prompt,
             image_paths=image_sequence[:5],  # 最多使用5帧
+            task_type="navigation_task"
         )
         execution_time = time.time() - start_time
 
@@ -112,24 +104,37 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
         print(".2f")
         print(f"📝 Result: {direct_output[:200]}...")
 
-        return {
+        result = {
             'memory_enabled': enable_memory,
             'task': navigation_task_prompt,
             'images_used': len(image_sequence),
             'output': direct_output,
             'execution_time': execution_time,
             'success': bool(direct_output and len(direct_output.strip()) > 10),
-            'memory_stats': long_memory.get_stats() if enable_memory else None
+            'memory_stats': None
         }
+
+        # Add memory statistics if memory is enabled
+        if enable_memory and hasattr(solver, 'long_memory') and solver.long_memory:
+            result['memory_stats'] = solver.long_memory.get_stats()
+
+        return result
 
     except Exception as e:
         print(f"❌ Error during execution: {e}")
-        return {
+        result = {
             'memory_enabled': enable_memory,
             'task': navigation_task_prompt,
             'error': str(e),
-            'success': False
+            'success': False,
+            'memory_stats': None
         }
+
+        # Add memory statistics even in error case if available
+        if enable_memory and hasattr(solver, 'long_memory') and solver.long_memory:
+            result['memory_stats'] = solver.long_memory.get_stats()
+
+        return result
 
 
 def main(enable_memory: bool = True, frame_dir: str = "test/vln"):

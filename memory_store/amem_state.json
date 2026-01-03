@@ -1,0 +1,119 @@
+{
+  "long_term_memories": [
+    "广场内有盒马、永辉等大型超市 广场内有盒马 永辉等大型超市 Shopping and location information general shopping commerce",
+    "Task: 广场内有什么超市 task 广场内有什么超市 Shopping and location information general shopping commerce",
+    "广场内有盒马、永辉等大型超市 广场内有盒马 永辉等大型超市 Shopping and location information general shopping commerce",
+    "Task: 广场内有什么超市 task 广场内有什么超市 Shopping and location information general shopping commerce"
+  ],
+  "memory_metadata": [
+    {
+      "content": "广场内有盒马、永辉等大型超市 广场内有盒马 永辉等大型超市 Shopping and location information general shopping commerce",
+      "original_content": "广场内有盒马、永辉等大型超市",
+      "analysis": {
+        "keywords": [
+          "广场内有盒马",
+          "永辉等大型超市"
+        ],
+        "context": "Shopping and location information",
+        "tags": [
+          "general",
+          "shopping",
+          "commerce"
+        ]
+      },
+      "type": "user_input",
+      "timestamp": 1767410745.0799768,
+      "added_at": "2026-01-03T11:25:45.081114",
+      "content_length": 89,
+      "amplified": true
+    },
+    {
+      "content": "Task: 广场内有什么超市 task 广场内有什么超市 Shopping and location information general shopping commerce",
+      "original_content": "Task: 广场内有什么超市",
+      "analysis": {
+        "keywords": [
+          "task",
+          "广场内有什么超市"
+        ],
+        "context": "Shopping and location information",
+        "tags": [
+          "general",
+          "shopping",
+          "commerce"
+        ]
+      },
+      "type": "qa_task",
+      "timestamp": 1767410751.2023196,
+      "added_at": "2026-01-03T11:25:51.202321",
+      "content_length": 88,
+      "amplified": true
+    },
+    {
+      "content": "广场内有盒马、永辉等大型超市 广场内有盒马 永辉等大型超市 Shopping and location information general shopping commerce",
+      "original_content": "广场内有盒马、永辉等大型超市",
+      "analysis": {
+        "keywords": [
+          "广场内有盒马",
+          "永辉等大型超市"
+        ],
+        "context": "Shopping and location information",
+        "tags": [
+          "general",
+          "shopping",
+          "commerce"
+        ]
+      },
+      "type": "user_input",
+      "timestamp": 1767411062.3411462,
+      "added_at": "2026-01-03T11:31:02.342292",
+      "content_length": 89,
+      "amplified": true
+    },
+    {
+      "content": "Task: 广场内有什么超市 task 广场内有什么超市 Shopping and location information general shopping commerce",
+      "original_content": "Task: 广场内有什么超市",
+      "analysis": {
+        "keywords": [
+          "task",
+          "广场内有什么超市"
+        ],
+        "context": "Shopping and location information",
+        "tags": [
+          "general",
+          "shopping",
+          "commerce"
+        ]
+      },
+      "type": "qa_task",
+      "timestamp": 1767411062.342396,
+      "added_at": "2026-01-03T11:31:02.342396",
+      "content_length": 88,
+      "amplified": true
+    }
+  ],
+  "stats": {
+    "total_memories": 4,
+    "retrieval_count": 2,
+    "avg_retrieval_time": 3.329254388809204,
+    "last_save_time": null,
+    "amem_enabled": true,
+    "performance_metrics": {
+      "retrieval_times": [
+        3.329254388809204
+      ],
+      "memory_usage": [],
+      "error_count": 1,
+      "success_rate": 0.0
+    },
+    "memory_types": {
+      "custom": 2,
+      "qa_task": 2
+    },
+    "retrieval_patterns": {
+      "512": 1
+    }
+  },
+  "retriever_config": {
+    "use_api_embedding": true
+  }
+}

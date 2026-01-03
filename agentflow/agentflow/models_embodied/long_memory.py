@@ -177,9 +177,9 @@ class LongMemory:
             }
             self.memory_metadata.append(full_metadata)
 
-            # 更新检索器
+            # 更新检索器 - 使用add_document追加而不是add_documents替换
             if self.retriever:
-                self.retriever.add_documents([processed_content])
+                self.retriever.add_document(processed_content)
 
             # 更新统计信息
             self.stats['total_memories'] += 1
@@ -216,13 +216,22 @@ class LongMemory:
 
         try:
             self.logger.debug(f"Starting memory retrieval for query: '{query[:50]}...'")
+            self.logger.debug(f"Corpus length: {len(self.corpus) if hasattr(self, 'corpus') and self.corpus else 0}")
+            self.logger.debug(f"Retriever available: {self.retriever is not None}")
+            self.logger.debug(f"A-MEM enabled: {self.use_amem}")
 
             # 执行检索
             indices = self.retriever.retrieve(query, k=k)
+            self.logger.debug(f"Retrieved indices: {indices}")
+            self.logger.debug(f"Retrieved indices: {indices}")
 
             # 构建结果
+            self.logger.debug(f"Building results from {len(indices)} indices")
+            self.logger.debug(f"long_term_memories length: {len(self.long_term_memories)}")
+            self.logger.debug(f"memory_metadata length: {len(self.memory_metadata)}")
             results = []
             for idx in indices:
+                self.logger.debug(f"Processing index {idx}, valid range: 0-{len(self.long_term_memories)-1}")
                 if 0 <= idx < len(self.long_term_memories):
                     memory_content = self.long_term_memories[idx]
                     metadata = self.memory_metadata[idx] if idx < len(self.memory_metadata) else {}
@@ -232,6 +241,8 @@ class LongMemory:
                         'metadata': metadata,
                         'index': idx
                     })
+                else:
+                    self.logger.warning(f"Invalid index {idx} (valid range: 0-{len(self.long_term_memories)-1})")
 
             # 更新统计信息
             retrieval_time = time.time() - start_time
@@ -372,16 +383,35 @@ class LongMemory:
 
                     # 加载检索器状态
                     retriever_path = self.storage_dir / "retriever.pkl"
-                    if retriever_path.exists() and self.retriever:
+                    self.logger.info(f"Loading retriever from {retriever_path}, exists: {retriever_path.exists()}")
+                    if retriever_path.exists():
                         try:
                             with open(retriever_path, 'rb') as f:
                                 loaded_retriever = pickle.load(f)
-                                # 重新添加文档到检索器
-                                if self.long_term_memories:
-                                    loaded_retriever.add_documents(self.long_term_memories)
-                                self.retriever = loaded_retriever
+                                self.logger.info(f"Loaded retriever with corpus length: {len(loaded_retriever.corpus) if hasattr(loaded_retriever, 'corpus') else 'no corpus'}")
+                                self.logger.info(f"Expected corpus length: {len(self.long_term_memories)}")
+
+                                # 验证corpus是否与long_term_memories同步
+                                current_corpus_size = len(loaded_retriever.corpus) if hasattr(loaded_retriever, 'corpus') else 0
+                                if current_corpus_size == len(self.long_term_memories):
+                                    self.retriever = loaded_retriever
+                                    self.logger.info("Retriever loaded successfully - corpus size matches")
+                                else:
+                                    self.logger.warning(f"Corpus size mismatch ({current_corpus_size} vs {len(self.long_term_memories)}), creating new retriever")
+                                    # 如果不匹配，创建新的retriever
+                                    if self.long_term_memories:
+                                        self.retriever = HybridRetriever(
+                                            model_name=self.retriever_config.get('model_name', 'all-MiniLM-L6-v2'),
+                                            use_api_embedding=self.retriever_config.get('use_api_embedding', False)
+                                        )
+                                        self.retriever.add_documents(self.long_term_memories)
+                                        self.logger.info(f"Created new retriever with {len(self.long_term_memories)} documents")
                         except Exception as e:
-                            print(f"⚠️  Failed to load retriever state: {e}")
+                            self.logger.error(f"⚠️  Failed to load retriever state: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        self.logger.info("Retriever pickle file does not exist, will create new retriever")
 
             print(f"✅ Memory state loaded from {self.storage_dir}")
             return True
@@ -439,3 +469,5 @@ class LongMemory:
             self.save_state()
 
         return cleared_count
+
+

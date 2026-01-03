@@ -156,21 +156,32 @@ class HybridRetriever:
             return False
 
         try:
+            print(f"Adding {len(documents)} documents to retriever")
+
             # 初始化BM25
             if self.bm25_available:
                 tokenized_docs = [self._simple_tokenize(doc.lower()) for doc in documents]
                 self.bm25 = BM25Okapi(tokenized_docs)
+                print(f"BM25 initialized with {len(tokenized_docs)} documents")
 
             # 初始化语义嵌入
             if self.semantic_available:
                 if self.use_api_embedding:
+                    print("Computing API embeddings...")
                     self.embeddings = self._get_api_embedding(documents)
                 elif self.model:
+                    print("Computing local embeddings...")
                     self.embeddings = self.model.encode(documents)
+
+                if self.embeddings is not None:
+                    print(f"Embeddings computed, shape: {self.embeddings.shape}")
+                else:
+                    print("Failed to compute embeddings")
 
             # 更新语料库和文档映射
             self.corpus = documents
             self.document_ids = {doc: idx for idx, doc in enumerate(documents)}
+            print(f"Corpus updated with {len(self.corpus)} documents")
 
             return True
 
@@ -241,17 +252,26 @@ class HybridRetriever:
             bm25_scores = self._get_bm25_scores(query)
             semantic_scores = self._get_semantic_scores(query)
 
+            print(f"Debug: BM25 scores shape: {bm25_scores.shape}, Semantic scores shape: {semantic_scores.shape}")
+            print(f"Debug: Corpus length: {len(self.corpus)}")
+
             # 组合评分
             hybrid_scores = self._combine_scores(bm25_scores, semantic_scores)
+
+            print(f"Debug: Hybrid scores shape: {hybrid_scores.shape}, values: {hybrid_scores[:5]}")
 
             # 返回Top-K索引
             k = min(k, len(self.corpus))
             top_k_indices = np.argsort(hybrid_scores)[-k:][::-1]
 
+            print(f"Debug: Top-K indices: {top_k_indices.tolist()}")
+
             return top_k_indices.tolist()
 
         except Exception as e:
             print(f"Error during retrieval: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def search(self, query: str, k: int = 5) -> List[int]:

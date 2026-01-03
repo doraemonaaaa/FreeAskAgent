@@ -17,8 +17,17 @@ class ShortMemory:
     提供基本的CRUD操作接口，支持多种文件类型的自动识别。
     """
 
-    def __init__(self):
-        """初始化短期记忆"""
+    def __init__(self, max_files: int = 100, max_actions: int = 1000):
+        """
+        初始化短期记忆
+
+        Args:
+            max_files: 最大文件数量限制
+            max_actions: 最大动作记录数量限制
+        """
+        self.max_files = max_files
+        self.max_actions = max_actions
+
         self.query: Optional[str] = None
         self.files: List[Dict[str, str]] = []
         self.actions: Dict[str, Dict[str, Any]] = {}
@@ -101,6 +110,8 @@ class ShortMemory:
             raise ValueError("The number of files and descriptions must match.")
 
         for fname, desc in zip(file_name, description):
+            if len(self.files) >= self.max_files:
+                raise ValueError(f"Maximum number of files ({self.max_files}) exceeded")
             self.files.append({
                 'file_name': fname,
                 'description': desc
@@ -116,7 +127,13 @@ class ShortMemory:
             sub_goal: 子目标
             command: 执行命令
             result: 执行结果
+
+        Raises:
+            ValueError: 当动作数量超过限制时
         """
+        if len(self.actions) >= self.max_actions:
+            raise ValueError(f"Maximum number of actions ({self.max_actions}) exceeded")
+
         action = {
             'tool_name': tool_name,
             'sub_goal': sub_goal,
@@ -158,3 +175,5 @@ class ShortMemory:
         self.query = None
         self.files = []
         self.actions = {}
+
+

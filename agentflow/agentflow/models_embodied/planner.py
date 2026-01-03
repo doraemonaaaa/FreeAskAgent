@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..engine.factory import create_llm_engine
 from ..models_embodied.formatters import NextStep, QueryAnalysis
-from ..models_embodied.memory import Memory
+from ..models_embodied.short_memory import ShortMemory
 from ..utils.utils import get_image_info, normalize_image_paths
 from ..models_embodied.prompts.vln import vln_prompt
 from ..models_embodied.prompts.query_analysis import QuerynalysisPrompt
@@ -111,10 +111,33 @@ class Planner:
 
         return context, sub_goal, tool_name
     
-    def analyze_query(self, question: str, image: str) -> str:
+    def analyze_query(self, question: str, image: str, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
 
-        query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info)
+        # Include relevant memories in query analysis
+        memory_context = ""
+        if relevant_memories:
+            memory_items = []
+            for mem in relevant_memories:
+                if isinstance(mem, dict):
+                    content = mem.get('original_content') or mem.get('content', '')
+                    if isinstance(content, str) and len(content.strip()) > 0:
+                        clean_content = content
+                        if ' Shopping' in clean_content:
+                            clean_content = clean_content.split(' Shopping')[0]
+                        if ' general' in clean_content:
+                            clean_content = clean_content.split(' general')[0]
+                        if ' commerce' in clean_content:
+                            clean_content = clean_content.split(' commerce')[0]
+
+                        if len(clean_content.strip()) > 3 and any('\u4e00' <= char <= '\u9fff' for char in clean_content):
+                            memory_items.append(clean_content.strip())
+
+            if memory_items:
+                memory_context = "\n\n相关记忆信息：\n" + "\n".join([f"• {item}" for item in memory_items])
+                print(f"DEBUG: Including {len(memory_items)} memory items in query analysis")
+
+        query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info, memory_context)
         input_data = [query_prompt]
         
         image_paths = normalize_image_paths(image)
@@ -134,14 +157,40 @@ class Planner:
 
         return str(self.query_analysis).strip()
 
-    def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
+    def generate_direct_output(self, question: str, image: str, memory: ShortMemory, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
+
+        # Format relevant memories for context
+        memory_context = ""
+        if relevant_memories:
+            memory_items = []
+            for mem in relevant_memories:
+                if isinstance(mem, dict):
+                    # Priority: original_content > content
+                    content = mem.get('original_content') or mem.get('content', '')
+                    if isinstance(content, str) and len(content.strip()) > 0:
+                        # Clean up content - remove processing artifacts
+                        clean_content = content
+                        # Remove English parts that are processing artifacts
+                        if ' Shopping' in clean_content:
+                            clean_content = clean_content.split(' Shopping')[0]
+                        if ' general' in clean_content:
+                            clean_content = clean_content.split(' general')[0]
+                        if ' commerce' in clean_content:
+                            clean_content = clean_content.split(' commerce')[0]
+
+                        # Only keep meaningful Chinese content
+                        if len(clean_content.strip()) > 3 and any('\u4e00' <= char <= '\u9fff' for char in clean_content):
+                            memory_items.append(clean_content.strip())
+
+            if memory_items:
+                memory_context = "\n\n重要提示：请基于以下已知信息回答问题：\n" + "\n".join([f"• {item}" for item in memory_items]) + "\n\n这些信息是准确的，请直接使用它们来回答用户的问题。"
+
         if self.is_multimodal:
             prompt_generate_final_output = f"""
 Context:
 Query: {question}
-Image: {image_info}
-
+Image: {image_info}{memory_context}
 Actions Taken:
 {memory.get_actions()}
 
@@ -151,6 +200,21 @@ VLN Task Principle Prompt:
 Tools:
 Available tools: {self.available_tools}
 Metadata for the tools: {self.toolbox_metadata}
+"""
+        else:
+            # For non-multimodal text-only queries
+            if memory_context:
+                prompt_generate_final_output = f"""{memory_context}
+
+用户问题：{question}
+
+请基于上述的已知信息直接回答用户的问题。如果已知信息中包含相关答案，请直接使用这些信息回答。
+"""
+            else:
+                prompt_generate_final_output = f"""
+用户问题：{question}
+
+请回答用户的问题。
 """
 
         input_data = [prompt_generate_final_output]

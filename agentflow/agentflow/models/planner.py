@@ -526,7 +526,7 @@ Instructions:
         return final_output
 
 
-    def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
+    def generate_direct_output(self, question: str, image: str, memory: Memory, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_generate_final_output = f"""
@@ -543,12 +543,27 @@ Please generate the concise output based on the query, image information, initia
 Answer:
 """
         else:
+            # Format relevant memories for context
+            memory_context = ""
+            if relevant_memories:
+                memory_items = []
+                for mem in relevant_memories:
+                    if isinstance(mem, dict) and 'content' in mem:
+                        # Extract original content, removing processing artifacts
+                        content = mem['content']
+                        if isinstance(content, str):
+                            # Clean up processed content by taking the first part before keywords
+                            original_content = content.split('。')[0] + '。' if '。' in content else content
+                            memory_items.append(f"- {original_content.strip()}")
+                if memory_items:
+                    memory_context = "\n- **Relevant Memories:**\n" + "\n".join(memory_items)
+
             prompt_generate_final_output = f"""
 Task: Generate a concise final answer to the query based on all provided context.
 
 Context:
 - **Query:** {question}
-- **Initial Analysis:** {self.query_analysis}
+- **Initial Analysis:** {self.query_analysis}{memory_context}
 - **Actions Taken:** {memory.get_actions()}
 
 Instructions:
