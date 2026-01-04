@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..engine.factory import create_llm_engine
 from ..models_embodied.formatters import NextStep, QueryAnalysis
-from ..models_embodied.memory import Memory
+from ..models_embodied.memory.short_memory import ShortMemory
 from ..utils.utils import get_image_info, normalize_image_paths
 from ..models_embodied.prompts.vln import vln_prompt
 from ..models_embodied.prompts.query_analysis import QuerynalysisPrompt
@@ -111,11 +111,11 @@ class Planner:
 
         return context, sub_goal, tool_name
     
-    def analyze_query(self, question: str, image: str) -> str:
+    def analyze_query(self, question: str, image: str, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
 
         query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info)
-        input_data = [query_prompt]
+        input_data = [query_prompt, relevant_memories]
         
         image_paths = normalize_image_paths(image)
         for path in image_paths:
@@ -134,7 +134,7 @@ class Planner:
 
         return str(self.query_analysis).strip()
 
-    def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
+    def generate_direct_output(self, question: str, image: str, memory: ShortMemory, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_generate_final_output = f"""
@@ -151,7 +151,22 @@ VLN Task Principle Prompt:
 Tools:
 Available tools: {self.available_tools}
 Metadata for the tools: {self.toolbox_metadata}
-"""
+""" 
+        else:
+            prompt_generate_final_output = f"""
+Context:
+Query: {question}
+
+Actions Taken:
+{memory.get_actions()}
+
+VLN Task Principle Prompt:
+{vln_prompt()}
+
+Tools:
+Available tools: {self.available_tools}
+Metadata for the tools: {self.toolbox_metadata}
+""" 
 
         input_data = [prompt_generate_final_output]
         image_paths = normalize_image_paths(image)

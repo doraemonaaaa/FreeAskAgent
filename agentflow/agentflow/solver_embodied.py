@@ -1,11 +1,12 @@
 import argparse
 import time
 import json
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence, Union, Dict, Any
 
 from ..agentflow.models_embodied.initializer import Initializer
 from ..agentflow.models_embodied.planner import Planner
-from ..agentflow.models_embodied.memory import Memory
+from ..agentflow.models_embodied.memory.short_memory import ShortMemory
+from ..agentflow.models_embodied.memory.long_memory import LongMemory
 from ..agentflow.models_embodied.executor import Executor
 from ..agentflow.utils.utils import make_json_serializable_truncated
 
@@ -22,10 +23,12 @@ class SolverEmbodied:
         max_tokens: int = 4000,
         root_cache_dir: str = "cache",
         verbose: bool = True,
-        temperature: float = .0
+        temperature: float = .0,
+        enable_memory: bool = False,
+        memory_config: Optional[Dict[str, Any]] = None
     ):
         self.planner = planner
-        self.memory = memory
+        self.memory = memory  # Keep backward compatibility with basic memory
         self.executor = executor
         self.max_steps = max_steps
         self.max_time = max_time
@@ -36,13 +39,85 @@ class SolverEmbodied:
         self.temperature  = temperature
         assert all(output_type in ["base", "final", "direct"] for output_type in self.output_types), "Invalid output type. Supported types are 'base', 'final', 'direct'."
         self.verbose = verbose
-        
-    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None):
+
+        # Memory system configuration
+        self.enable_memory = enable_memory
+        self.memory_config = memory_config or {}
+
+        # Initialize advanced memory system if enabled
+        self.short_memory = None
+        self.long_memory = None
+        if self.enable_memory:
+            self._init_memory_system()
+
+    def _init_memory_system(self):
+        """Initialize the advanced memory system (ShortMemory + LongMemory)"""
+        if self.verbose:
+            print("🧠 Initializing advanced memory systems...")
+
+        # Initialize ShortMemory for current session management
+        self.short_memory = ShortMemory()
+
+        # Initialize LongMemory for persistent memory with A-MEM capabilities
+        retriever_config = self.memory_config.get('retriever_config', {'use_api_embedding': True})
+        self.long_memory = LongMemory(
+            use_amem=True,
+            retriever_config=retriever_config,
+            storage_dir=self.memory_config.get('storage_dir', "./memory_store"),
+            enable_persistence=self.memory_config.get('enable_persistence', True),
+            max_memories=self.memory_config.get('max_memories', 1000)
+        )
+
+        if self.verbose:
+            print("✅ Advanced memory systems initialized and ready")
+
+    def populate_memory_for_task(self, task_description: str, task_type: str = "general_task"):
+        """
+        Populate memory systems with task-related information
+
+        Args:
+            task_description: Description of the current task
+            task_type: Type of task for memory categorization
+        """
+        if not self.enable_memory or not self.short_memory or not self.long_memory:
+            return
+
+        # Add task information to short-term memory
+        self.short_memory.set_query(task_description)
+
+        # Add contextual memory to long-term memory for better retrieval
+        memory_content = f"Task: {task_description}"
+        if task_type == "navigation_task":
+            memory_content += ". Analyzing environment and planning navigation steps."
+        elif task_type == "analysis_task":
+            memory_content += ". Performing detailed analysis and reasoning."
+
+        self.long_memory.add_memory(memory_content, task_type)
+
+    def retrieve_relevant_memories(self, query: str, k: int = 5) -> list:
+        """
+        Retrieve relevant memories for the given query
+
+        Args:
+            query: Query to search for relevant memories
+            k: Number of memories to retrieve
+
+        Returns:
+            List of relevant memory objects
+        """
+        if not self.enable_memory or not self.long_memory:
+            return []
+
+        return self.long_memory.retrieve_memories(query, k)
+
+    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None, task_type: str = "general_task"):
         """
         Solve a single problem from the benchmark dataset.
-        
+
         Args:
-            index (int): Index of the problem to solve
+            question: The query/question to solve
+            image_paths: Optional paths to images for multimodal understanding
+            task_type: Type of task for memory categorization
         """
         # Update cache directory for the executor
         self.executor.set_query_cache_dir(self.root_cache_dir)
@@ -60,6 +135,20 @@ class SolverEmbodied:
                         print(f"==> 🖼️ Frame {idx+1}: {path}")
                 else:
                     print(f"\n==> 🖼️ Received Image: {image_paths}")
+
+        # Populate memory systems with task information if memory is enabled
+        if self.enable_memory:
+            self.populate_memory_for_task(question, task_type)
+
+            # Retrieve relevant memories for context enhancement
+            relevant_memories = self.retrieve_relevant_memories(question, k=3)
+            print(f"DEBUG: Retrieved {len(relevant_memories)} memories at solver level")
+            if relevant_memories:
+                for i, mem in enumerate(relevant_memories[:2]):
+                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+            if relevant_memories and self.verbose:
+                print(f"📚 Retrieved {len(relevant_memories)} relevant memories for context")
+            json_data["relevant_memories"] = relevant_memories
 
         # Generate base response if requested
         # if 'base' in self.output_types:
@@ -79,7 +168,12 @@ class SolverEmbodied:
 
             # [1] Analyze query
             query_start_time = time.time()
-            query_analysis = self.planner.analyze_query(question, image_paths)
+            relevant_memories = json_data.get("relevant_memories", [])
+            print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
+            if relevant_memories:
+                for i, mem in enumerate(relevant_memories[:2]):
+                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+            query_analysis = self.planner.analyze_query(question, image_paths, relevant_memories)
             json_data["query_analysis"] = query_analysis
             if self.verbose:
                 print(f"\n==> 🔍 Step 0: Query Analysis\n")
@@ -94,7 +188,8 @@ class SolverEmbodied:
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
-                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory)
+                relevant_memories = json_data.get("relevant_memories", [])
+                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory, relevant_memories)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
@@ -117,6 +212,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      base_url : str = None,
                      temperature: float = 0.0,
                      enable_multimodal: Optional[bool] = None,
+                     enable_memory: bool = False,
+                     memory_config: Optional[Dict[str, Any]] = None,
                      ):
 
     # Parse model_engine configuration
@@ -148,7 +245,7 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     )
 
     # Instantiate Memory
-    memory = Memory()
+    memory = ShortMemory(max_files=50, max_actions=500)
 
     # Instantiate Executor with tool instances cache
     executor = Executor(
@@ -171,7 +268,9 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         max_tokens=max_tokens,
         root_cache_dir=root_cache_dir,
         verbose=verbose,
-        temperature=temperature
+        temperature=temperature,
+        enable_memory=enable_memory,
+        memory_config=memory_config
     )
     return solver
 
