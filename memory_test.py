@@ -15,7 +15,7 @@ from typing import Dict, Any, Optional
 # 添加项目路径
 sys.path.append('/root/autodl-tmp/FreeAskAgent')
 
-from agentflow.agentflow.solver_embodied import construct_solver_embodied
+from agentflow.agents.solver_embodied import construct_solver_embodied
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="agentflow/.env")

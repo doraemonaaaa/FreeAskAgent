@@ -21,7 +21,7 @@ import json
 import numpy as np
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union, Tuple
-from ..base import BaseTool
+from agentflow.tools.base import BaseTool
 
 # Tool name mapping - this defines the external name for this tool
 TOOL_NAME = "SAM2_Perception_Tool"

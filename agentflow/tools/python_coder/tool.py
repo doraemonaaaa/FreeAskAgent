@@ -7,8 +7,8 @@ from io import StringIO
 import contextlib
 
 import threading
-from agentflow.agentflow.tools.base import BaseTool
-from agentflow.agentflow.engine.factory import create_llm_engine
+from ..base import BaseTool
+from agentflow.agents.engine.factory import create_llm_engine
 
 import signal
 from contextlib import contextmanager

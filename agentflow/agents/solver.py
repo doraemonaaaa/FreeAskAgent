@@ -21,12 +21,12 @@ import time
 import json
 from typing import Optional, Sequence, Union
 
-from ..agentflow.models.initializer import Initializer
-from ..agentflow.models.planner import Planner
-from ..agentflow.models.verifier import Verifier
-from ..agentflow.models.memory import Memory
-from ..agentflow.models.executor import Executor
-from ..agentflow.utils.utils import make_json_serializable_truncated
+from ..agents.models.initializer import Initializer
+from ..agents.models.planner import Planner
+from ..agents.models.verifier import Verifier
+from ..agents.models.memory import Memory
+from ..agents.models.executor import Executor
+from ..agents.utils.utils import make_json_serializable_truncated
 
 class Solver:
     def __init__(

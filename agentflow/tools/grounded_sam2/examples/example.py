@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from agentflow.agentflow.tools.grounded_sam2.tool import GroundedSAM2_Tool
+from agentflow.agents.tools.grounded_sam2.tool import GroundedSAM2_Tool
 
 IMAGE_PATH = os.environ.get("GROUND_SAM_IMAGE", "/home/pengyh/workspace/FreeAskAgent/input_img1.jpg")
 OUTPUT_DIR = Path(os.environ.get("GROUND_SAM_OUTPUT", "tmp"))

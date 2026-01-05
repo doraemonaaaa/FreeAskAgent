@@ -5,16 +5,13 @@ import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from agentflow.tools.base import BaseTool
-from agentflow.engine.factory import create_llm_engine
+from agents.tools.base import BaseTool
+from agents.engine.factory import create_llm_engine
 
 load_dotenv()
 
-# Tool name mapping - this defines the external name for this tool
-TOOL_NAME = "Web_RAG_Search_Tool"
-
-LIMITATION = f"""
-The {TOOL_NAME} has several limitations: 
+LIMITATION = """
+The Web_Search_Tool has several limitations: 
 1) Requires valid URLs that are accessible and contain text content. 
 2) May not work with JavaScript-heavy websites or those requiring authentication. 
 3) Performance depends on the quality and relevance of the website content. 
@@ -23,8 +20,8 @@ The {TOOL_NAME} has several limitations:
 6) Requires OpenAI API access for embeddings and LLM generation.
 """
 
-BEST_PRACTICE = f"""
-For optimal results with the {TOOL_NAME}:
+BEST_PRACTICE = """
+For optimal results with the Web_Search_Tool:
 1) Use specific, targeted queries rather than broad questions.
 2) Ensure the URL is accessible and contains relevant information.
 3) Prefer websites with well-structured, text-rich content.
@@ -72,11 +69,11 @@ In the fourth quarter of 2023, the company achieved a total revenue of $5.2 mill
 """
 
 class Web_Search_Tool(BaseTool):
-    require_llm_engine = True
+    # require_llm_engine = True
 
     def __init__(self, model_string="gpt-4o-mini"):
         super().__init__(
-            tool_name=TOOL_NAME,
+            tool_name="Web_Search_Tool",
             tool_description="A specialized tool for answering questions by retrieving relevant information from a given website using RAG (Retrieval-Augmented Generation).",
             tool_version="1.0.0",
             input_types={
@@ -99,7 +96,6 @@ class Web_Search_Tool(BaseTool):
                 "best_practice": BEST_PRACTICE
             }
         )
-
         # self.model_string = "gpt-4o-mini" # NOTE: strong LLM for tool
         # self.model_string = "gemini-1.5-flash" # NOTE: weak 8B model for tool
         # self.model_string = "dashscope" # NOTE: weak Qwen2.5-7B model for tool
@@ -109,8 +105,7 @@ class Web_Search_Tool(BaseTool):
         self.chunk_size = 200
         self.chunk_overlap = 20
         self.top_k = 10
-        # self.embeddings_model = "text-embedding-3-large" # or "text-embedding-3-small" for efficiency
-        self.embeddings_model = "text-embedding-3-small"
+        self.embeddings_model = "text-embedding-3-large" # or "text-embedding-3-small" for efficiency
         self.max_window_size = 1000000
 
         # NOTE: deterministic mode
@@ -270,52 +265,3 @@ class Web_Search_Tool(BaseTool):
         metadata = super().get_metadata()
         # metadata['require_llm_engine'] = self.require_llm_engine
         return metadata
-
-if __name__ == "__main__":
-    # Test command:
-    """
-    Run the following commands in the terminal to test the script:
-    
-    cd agentflow/tools/web_search
-    python tool.py
-    """
-
-    import json
-
-    # Example usage of the Web_Search_Tool
-    tool = Web_Search_Tool(model_string="gpt-4o-mini") # NOTE: strong LLM for tool
-    # tool = Web_Search_Tool(model_string="gemini-1.5-flash") # NOTE: weak 8B model for tool
-    # tool = Web_Search_Tool(model_string="dashscope") # NOTE: weak Qwen2.5-7B model for tool
-
-    # Get tool metadata
-    metadata = tool.get_metadata()
-    # print("Tool Metadata:")
-    # print(json.dumps(metadata, indent=4))
-
-    examples = [
-        {
-            "query": "What is the exact mass in kg of the moon?", 
-            "url": "https://en.wikipedia.org/wiki/Moon"
-        },
-        {
-            "query": "What is the capital of France?", 
-            "url": "https://en.wikipedia.org/wiki/France"
-        },
-        {
-            "query": "What are the main features of Python programming language?", 
-            "url": "https://www.python.org/about/apps/"
-        }
-    ]
-
-    for example in examples:
-        try:
-            # Execute the tool with example query
-            execution = tool.execute(**example)
-            print("\nGenerated Response:")
-            print(execution)
-            print("\n")
-        except Exception as e:
-            print(f"Execution failed: {e}")
-
-
-    print("\nDone!")

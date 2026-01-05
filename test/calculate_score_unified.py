@@ -5,7 +5,7 @@ import argparse
 import tqdm
 import sys
 from pydantic import BaseModel
-from agentflow.agentflow.engine.openai import ChatOpenAI
+from agentflow.agents.engine.openai import ChatOpenAI
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from utils import ResultAnalyzer

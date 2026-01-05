@@ -10,7 +10,7 @@ from tenacity import (
     wait_random_exponential,
 )
 
-from agentflow.models.formatters import QueryAnalysis
+from agents.models.formatters import QueryAnalysis
 
 from .base import EngineLM, CachedEngine
 from .engine_utils import get_image_type_from_bytes

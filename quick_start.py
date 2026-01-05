@@ -2,8 +2,8 @@
 import os
 from pathlib import Path
 
-from agentflow.agentflow.solver_fast import construct_fast_solver
-from agentflow.agentflow.solver import construct_solver
+from agentflow.agents.solver_fast import construct_fast_solver
+from agentflow.agents.solver import construct_solver
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="agentflow/.env")

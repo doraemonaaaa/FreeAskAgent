@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-from agentflow.agentflow.solver_embodied import construct_solver_embodied
+from agentflow.agents.solver_embodied import construct_solver_embodied
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="agentflow/.env")

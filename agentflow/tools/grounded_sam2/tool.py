@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from agentflow.agentflow.tools.base import BaseTool
+from ..base import BaseTool
 
 TOOL_NAME = "GroundedSAM2_Tool"
 

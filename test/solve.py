@@ -10,11 +10,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
 sys.path.insert(0, project_root)
 
-from agentflow.agentflow.models.initializer import Initializer
-from agentflow.agentflow.models.planner import Planner
-from agentflow.agentflow.models.memory import Memory
-from agentflow.agentflow.models.executor import Executor
-from agentflow.agentflow.models.utils import make_json_serializable_truncated
+from agentflow.agents.models.initializer import Initializer
+from agentflow.agents.models.planner import Planner
+from agentflow.agents.models.memory import Memory
+from agentflow.agents.models.executor import Executor
+from agentflow.agents.models.utils import make_json_serializable_truncated
 
 class Solver:
     def __init__(

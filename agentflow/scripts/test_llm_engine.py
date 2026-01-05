@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 # Import the factory function
 try:
-    from agentflow.engine.factory import create_llm_engine
+    from agents.engine.factory import create_llm_engine
 except Exception as e:
     logger.error(f"❌ Failed to import create_llm_engine: {e}")
     exit(1)
