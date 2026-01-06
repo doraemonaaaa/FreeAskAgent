@@ -1,146 +1,257 @@
-# Technical Design Proposal
+# Technical Design Document
 
-## 1. Architecture Design
+## 1. System Architecture
 
 ### 整体架构
-Embodied Agent的记忆系统采用分层架构设计，将记忆功能分为短期记忆和长期记忆两个独立模块：
+FreeAskAgent Embodied Agent 模块采用分层架构设计，集成了完整的记忆系统、外部化prompt管理和统一的LLM调用：
 
 ```
 models_embodied/
-├── short_memory.py      # 短期记忆管理 (合并memory.py核心逻辑)
-├── long_memory.py       # 长期记忆管理 (提取自agentic_memory_system.py)
-├── md/
-│   ├── requirement.md   # 需求文档
-│   ├── design.md        # 技术设计文档
-│   └── task.md          # 实现计划
-└── [必须迁移] 辅助模块
-    ├── content_analyzer.py  # 内容分析器 (强制迁移)
-    └── hybrid_retriever.py  # 混合检索器 (强制迁移)
+├── planner.py              # 规划器 - 核心业务逻辑
+├── executor.py             # 执行器 - 工具调用执行
+├── initializer.py          # 初始化器 - 工具和配置管理
+├── formatters.py           # 格式化器 - 数据结构定义
+├── memory/                 # 记忆系统目录
+│   ├── __init__.py
+│   ├── short_memory.py     # 短期记忆 - 当前会话管理
+│   ├── long_memory.py      # 长期记忆 - 跨会话存储和检索
+│   ├── content_analyzer.py # 内容分析器 - LLM驱动的内容分析
+│   ├── hybrid_retriever.py # 混合检索器 - BM25+语义搜索
+│   └── memory_manager.py   # 记忆管理器 - 协调短期和长期记忆
+├── prompts/                # Prompt模板目录
+│   ├── __init__.py
+│   ├── vln.py             # VLN任务prompts
+│   ├── query_analysis.py  # 查询分析prompts
+│   ├── final_output.py    # 最终输出prompt构建器
+│   ├── content_analysis.py # 内容分析prompts
+│   ├── tom.py             # Theory of Mind prompts
+│   ├── *.txt              # 外部化prompt模板文件
+│   └── *.py               # Prompt构建函数
+└── md/                    # 文档目录
+    ├── requirement.md     # 需求文档
+    ├── design.md          # 技术设计文档
+    └── task.md            # 实现任务文档
 ```
 
-### 文件职责划分
-- **short_memory.py**: 负责当前会话的查询、文件和动作管理，是基础的记忆容器
-- **long_memory.py**: 负责跨会话的长期记忆存储、检索和管理，提供A-MEM增强功能
+### 模块职责划分
+- **Planner**: 负责查询分析、工具规划和最终输出生成，集成记忆检索
+- **MemoryManager**: 协调短期和长期记忆，管理对话窗口和自动总结
+- **ShortMemory**: 管理当前会话的对话历史、查询、文件和动作记录
+- **LongMemory**: 提供跨会话的持久化记忆存储和智能检索
+- **ContentAnalyzer**: 使用LLM分析记忆内容，提取关键词和上下文
+- **HybridRetriever**: 实现BM25和语义向量混合检索算法
+- **Prompts**: 外部化所有prompt模板，支持文件加载和变量替换
 
-## 2. Class and Interface Design (Class Diagram)
+## 2. Data Structures and Interfaces
+
+### 核心数据结构
+
+```python
+# 对话消息结构
+ConversationMessage = {
+    'role': str,           # 'user' | 'assistant'
+    'content': str,        # 消息内容
+    'timestamp': float,    # 时间戳
+    'turn_id': str,        # 对话轮次ID
+    'session_id': str,     # 会话ID
+    'window_id': int       # 窗口ID
+}
+
+# 记忆摘要结构
+MemorySummary = {
+    'content': str,        # 摘要内容
+    'original_content': str,  # 原始内容
+    'analysis': Dict[str, Any],  # 内容分析结果
+    'type': str,           # 记忆类型 ('conversation_summary')
+    'timestamp': float,    # 创建时间
+    'metadata': Dict[str, Any]  # 元数据
+}
+
+# 检索结果结构
+RetrievalResult = {
+    'content': str,        # 记忆内容
+    'metadata': Dict[str, Any],  # 元数据
+    'index': int           # 在记忆库中的索引
+}
+```
+
+### 类图设计
 
 ```mermaid
 classDiagram
+    class MemoryManager {
+        +short_memory: ShortMemory
+        +long_memory: LongMemory
+        +conversation_window_size: int
+        +add_message(role, content, turn_id)
+        +retrieve_relevant_memories(query, k)
+        +save_state(): bool
+        +get_stats(): Dict[str, Any]
+    }
+
     class ShortMemory {
-        +query: Optional[str]
-        +files: List[Dict[str, str]]
-        +actions: Dict[str, Dict[str, Any]]
-        +set_query(query: str)
-        +add_file(file_name, description)
-        +add_action(step_count, tool_name, sub_goal, command, result)
-        +get_query(): Optional[str]
-        +get_files(): List[Dict[str, str]]
-        +get_actions(): Dict[str, Dict[str, Any]]
-        -_init_file_types()
-        -_get_default_description(file_name): str
+        +conversation_history: List[Dict]
+        +current_window: List[Dict]
+        +session_id: str
+        +window_count: int
+        +append_message(role, content, turn_id)
+        +get_recent(n): List[Dict]
+        +get_window_for_summary(): Tuple[List, int]
+        +rollover_window(): Tuple[List, int]
     }
 
     class LongMemory {
         +long_term_memories: List[str]
-        +memory_metadata: List[Dict[str, Any]]
+        +memory_metadata: List[Dict]
         +retriever: HybridRetriever
         +content_analyzer: ContentAnalyzer
         +add_memory(content, memory_type, metadata)
-        +retrieve_memories(query, k): List[Dict[str, Any]]
-        +get_stats(): Dict[str, Any]
+        +add_conversation_summary(window, window_id, session_id)
+        +retrieve_memories(query, k): List[Dict]
         +save_state(): bool
         +load_state(): bool
-        -_init_amem_components()
-        -_setup_logging()
-    }
-
-    class HybridRetriever {
-        +add_documents(documents)
-        +retrieve(query, k): List[int]
-        +save(cache_file, embeddings_file)
-        +load(cache_file, embeddings_file)
-        -_get_bm25_scores(query)
-        -_get_semantic_scores(query)
-        -_combine_scores(bm25, semantic)
     }
 
     class ContentAnalyzer {
+        +llm_engine: Any
         +analyze_content(content): Dict[str, Any]
-        -_analyze_with_llm(content)
-        -_analyze_fallback(content)
-        -_build_analysis_prompt(content)
+        +_analyze_with_llm(content): Dict[str, Any]
+        +_analyze_fallback(content): Dict[str, Any]
     }
 
-    ShortMemory ||--o LongMemory : uses
-    LongMemory --> HybridRetriever : depends
-    LongMemory --> ContentAnalyzer : depends
-    HybridRetriever --> SentenceTransformer : optional
-    ContentAnalyzer --> LLMController : optional
+    class HybridRetriever {
+        +corpus: List[str]
+        +bm25: BM25Okapi
+        +embedder: SentenceTransformer
+        +add_documents(documents): None
+        +retrieve(query, k): List[int]
+        +_combine_scores(bm25_scores, semantic_scores): List[float]
+    }
+
+    class Planner {
+        +llm_engine: Any
+        +llm_engine_fixed: Any
+        +memory_manager: MemoryManager
+        +analyze_query(question, image, relevant_memories): str
+        +generate_direct_output(question, image, memory, relevant_memories): str
+        +extract_context_subgoal_and_tool(response): Tuple[str, str, str]
+    }
+
+    MemoryManager --> ShortMemory : manages
+    MemoryManager --> LongMemory : manages
+    LongMemory --> ContentAnalyzer : uses
+    LongMemory --> HybridRetriever : uses
+    Planner --> MemoryManager : uses
+    ShortMemory --> LongMemory : triggers summarization
 ```
 
-### 核心决策：关于hybrid_retriever和content_analyzer的强制迁移
+## 3. System Workflow
 
-**决策结果：必须迁移** (非可选)
+### 记忆管理流程
 
-**强制迁移理由：**
-1. **功能依赖性**：长期记忆系统的核心功能（混合检索、内容分析）完全依赖于这两个组件，是A-MEM系统的核心组成部分
-2. **架构完整性**：这两个模块是Embodied Agent记忆系统的关键组件，移除将导致系统功能完全失效
-3. **性能和质量保证**：A-MEM系统的核心价值体现在智能检索和内容分析能力上，必须完整迁移以保持系统性能
-4. **向后兼容性**：现有代码深度集成了这些组件，是系统正常运行的必要条件
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant P as Planner
+    participant MM as MemoryManager
+    participant SM as ShortMemory
+    participant LM as LongMemory
+    participant CA as ContentAnalyzer
+    participant HR as HybridRetriever
 
-**重要声明：**
-- `content_analyzer.py` 和 `hybrid_retriever.py` 是本次迁移的**强制要求**
-- 不得以任何形式简化或移除这两个模块的核心功能
-- 迁移过程中必须保持其完整性和独立性
+    U->>P: Send query
+    P->>MM: add_message('user', query)
+    MM->>SM: append_message('user', query)
+    SM->>SM: Check window size (3 turns)
 
-## 3. Detailed Migration Strategy
+    alt Window full
+        SM->>MM: Return completed window
+        MM->>LM: add_conversation_summary(window)
+        LM->>CA: analyze_content(window_text)
+        CA->>LM: Return analysis result
+        LM->>HR: Add to search index
+        LM->>MM: Summary added
+    end
 
-### Short Memory (合并逻辑)
-1. **核心逻辑提取**：
-   - 从`memory.py`提取`Memory`类的核心功能
-   - 保持原有的查询、文件、动作管理接口
-   - 保留文件类型识别和描述生成功能
+    P->>MM: retrieve_relevant_memories(query)
+    MM->>LM: retrieve_memories(query, k=5)
+    LM->>HR: Perform hybrid search
+    HR->>LM: Return relevant indices
+    LM->>MM: Return memory results
+    MM->>P: Return relevant memories
 
-2. **接口兼容性**：
-   - 保持与现有系统的完全兼容
-   - 所有原有的getter/setter方法保持不变
-   - 支持相同的参数格式和返回值类型
+    P->>P: Generate response with context
+    P->>MM: add_message('assistant', response)
+    MM->>SM: append_message('assistant', response)
+```
 
-3. **冲突处理**：
-   - 合并重复的辅助方法
-   - 统一错误处理机制
-   - 保持代码风格一致性
+### Prompt加载流程
 
-### Long Memory (提取逻辑)
-1. **功能提取**：
-   - 从`agentic_memory_system.py`提取长期记忆相关功能
-   - 保留A-MEM系统的检索和分析能力
-   - 保持持久化和统计功能
+```mermaid
+graph TD
+    A[Planner需要prompt] --> B[调用prompt构建函数]
+    B --> C[build_xxx_prompt()]
+    C --> D[_load_prompt_template()]
+    D --> E[从prompts/*.txt读取文件]
+    E --> F[模板变量替换]
+    F --> G[返回完整prompt字符串]
+```
 
-2. **依赖迁移**：
-   - 同时迁移`content_analyzer.py`和`hybrid_retriever.py`
-   - 保持原有的配置和初始化逻辑
-   - 维护向后兼容性
+## 4. LLM Integration Design
 
-3. **接口重构**：
-   - 简化初始化参数，移除不必要的配置项
-   - 提供更清晰的记忆管理API
-   - 增强错误处理和日志记录
+### 调用层次结构
+```
+Embodied Agent Layer (planner.py, content_analyzer.py)
+    ↓
+Engine Layer (engine/factory.py, engine/*.py)
+    ↓
+LLM Provider Layer (OpenAI, Anthropic, etc.)
+```
 
-### 辅助模块强制迁移
-1. **ContentAnalyzer迁移** (强制)：
-   - 必须完整迁移LLM分析功能
-   - 保留降级机制以确保可靠性
-   - 优化性能和错误处理
-   - 保持与long_memory.py的接口兼容性
+### 设计原则
+1. **统一入口**: 所有LLM调用通过 `engine.factory.create_llm_engine()` 创建实例
+2. **职责分离**: Embodied层专注于prompt组装和结果处理，不实现底层调用逻辑
+3. **配置驱动**: LLM引擎选择和参数通过配置参数控制
+4. **错误处理**: 各层都有适当的错误处理和降级机制
 
-2. **HybridRetriever迁移** (强制)：
-   - 必须完整保持BM25和语义搜索功能
-   - 支持多种嵌入方式（API/本地）
-   - 维护持久化能力
-   - 确保检索性能不低于原有水平
+### 接口规范
+```python
+# LLM引擎接口
+class LLMEngine:
+    def __init__(self, model_string: str, **kwargs): ...
+    def __call__(self, input_data: List[Any], **kwargs) -> Any: ...
 
-### 配置和初始化
-- 提供统一的配置接口
-- 支持环境变量和配置文件
-- 实现延迟初始化以提高启动性能
+# Embodied层使用模式
+llm_engine = create_llm_engine("gpt-4o", temperature=0.0)
+response = llm_engine([prompt_text, image_bytes], response_format=SomeFormat)
+```
+
+## 5. Configuration and Deployment
+
+### 配置参数
+```python
+memory_config = {
+    'conversation_window_size': 3,      # 对话窗口大小
+    'max_files': 100,                   # 最大文件数
+    'max_actions': 1000,                # 最大动作数
+    'storage_dir': './memory_store',    # 记忆存储目录
+    'max_memories': 1000,               # 最大记忆数
+    'retriever_config': {               # 检索器配置
+        'use_api_embedding': True,
+        'alpha': 0.5  # BM25 vs 语义权重
+    }
+}
+
+llm_config = {
+    'engine_name': 'gpt-4o',           # 主LLM引擎
+    'fixed_engine_name': 'dashscope',   # 固定引擎
+    'temperature': 0.0,                # 生成温度
+    'max_tokens': 4000                 # 最大token数
+}
+```
+
+### 部署考虑
+1. **内存管理**: LongMemory支持持久化，避免每次重启重新构建索引
+2. **性能优化**: HybridRetriever使用缓存的embeddings和BM25索引
+3. **可扩展性**: MemoryManager支持配置化的参数调整
+4. **监控**: 完整的统计信息和性能指标收集

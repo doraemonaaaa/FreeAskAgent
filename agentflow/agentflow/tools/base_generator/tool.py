@@ -1,7 +1,7 @@
 import os
 from collections.abc import Sequence
-from agentflow.tools.base import BaseTool
-from agentflow.engine.factory import create_llm_engine
+from agentflow.agentflow.tools.base import BaseTool
+from agentflow.agentflow.engine.factory import create_llm_engine
 
 # Tool name mapping - this defines the external name for this tool
 TOOL_NAME = "Generalist_Solution_Generator_Tool"

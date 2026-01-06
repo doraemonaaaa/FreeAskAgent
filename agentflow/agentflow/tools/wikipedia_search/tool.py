@@ -3,17 +3,17 @@ import sys
 import wikipedia
 from pydantic import BaseModel
 
-from agentflow.tools.base import BaseTool
-from agentflow.engine.factory import create_llm_engine
-from agentflow.tools.web_search.tool import Web_Search_Tool
+from agentflow.agentflow.tools.base import BaseTool
+from agentflow.agentflow.engine.factory import create_llm_engine
+from agentflow.agentflow.tools.web_search.tool import Web_Search_Tool
 
 # from web_rag import Web_Search_Tool
-# from agentflow.tools.web_search.tool import Web_Search_Tool # NOTE: Shall be used in the future
+# from agentflow.agentflow.tools.web_search.tool import Web_Search_Tool # NOTE: Shall be used in the future
 
 # from utilis import select_relevant_queries
 
-from agentflow.tools.base import BaseTool
-from agentflow.engine.factory import create_llm_engine
+from agentflow.agentflow.tools.base import BaseTool
+from agentflow.agentflow.engine.factory import create_llm_engine
 
 # Tool name mapping - this defines the external name for this tool
 TOOL_NAME = "Wikipedia_RAG_Search_Tool"

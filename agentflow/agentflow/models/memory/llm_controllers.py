@@ -73,7 +73,7 @@ class BaseLLMController(ABC):
 class OpenAIController(BaseLLMController):
     """OpenAI API 控制器"""
 
-    def __init__(self, model: str = "gpt-4o-mini", api_key: Optional[str] = None):
+    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None):
         if not OPENAI_AVAILABLE:
             raise ImportError("OpenAI package not found. Install with: pip install openai")
 
@@ -244,7 +244,7 @@ class LLMController:
 
     def __init__(self,
                  backend: Literal["openai", "litellm", "ollama", "sglang"] = "openai",
-                 model: str = "gpt-4o-mini",
+                 model: str = "gpt-4o",
                  api_key: Optional[str] = None,
                  api_base: Optional[str] = None,
                  sglang_host: str = "http://localhost",

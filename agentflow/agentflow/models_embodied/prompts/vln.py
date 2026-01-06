@@ -1,4 +1,4 @@
-from agentflow.agentflow.models_embodied.prompts.tom import build_tom_specified_task_prompt
+from .tom import build_tom_specified_task_prompt
 
 def vln_prompt() -> str:
     return build_tom_specified_task_prompt(VLN_TASK_PROMPT.format(characteristics=VLN_Characteristics, action_space=VLN_ACTION_SPACE), VLN_EXAMPLES)

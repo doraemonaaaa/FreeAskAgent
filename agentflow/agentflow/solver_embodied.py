@@ -3,12 +3,13 @@ import time
 import json
 from typing import Optional, Sequence, Union, Dict, Any
 
-from ..agentflow.models_embodied.initializer import Initializer
-from ..agentflow.models_embodied.planner import Planner
-from ..agentflow.models_embodied.short_memory import ShortMemory
-from ..agentflow.models_embodied.long_memory import LongMemory
-from ..agentflow.models_embodied.executor import Executor
-from ..agentflow.utils.utils import make_json_serializable_truncated
+from .models_embodied.initializer import Initializer
+from .models_embodied.planner import Planner
+from .models_embodied.memory.short_memory import ShortMemory
+from .models_embodied.memory.long_memory import LongMemory
+from .models_embodied.memory.memory_manager import MemoryManager
+from .models_embodied.executor import Executor
+from .utils.utils import make_json_serializable_truncated
 
 # TODO: No Tool Use
 class SolverEmbodied:
@@ -44,32 +45,43 @@ class SolverEmbodied:
         self.enable_memory = enable_memory
         self.memory_config = memory_config or {}
 
-        # Initialize advanced memory system if enabled
-        self.short_memory = None
-        self.long_memory = None
+        # Initialize memory manager (unified memory system)
+        self.memory_manager = None
         if self.enable_memory:
             self._init_memory_system()
 
     def _init_memory_system(self):
-        """Initialize the advanced memory system (ShortMemory + LongMemory)"""
+        """Initialize the unified memory system with MemoryManager"""
         if self.verbose:
-            print("🧠 Initializing advanced memory systems...")
+            print("🧠 Initializing unified memory system...")
 
-        # Initialize ShortMemory for current session management
-        self.short_memory = ShortMemory()
+        # Initialize MemoryManager for coordinated memory operations
+        short_memory_config = {
+            'max_files': self.memory_config.get('max_files', 100),
+            'max_actions': self.memory_config.get('max_actions', 1000),
+            'conversation_window_size': self.memory_config.get('conversation_window_size', 3)
+        }
 
-        # Initialize LongMemory for persistent memory with A-MEM capabilities
-        retriever_config = self.memory_config.get('retriever_config', {'use_api_embedding': True})
-        self.long_memory = LongMemory(
-            use_amem=True,
-            retriever_config=retriever_config,
-            storage_dir=self.memory_config.get('storage_dir', "./memory_store"),
-            enable_persistence=self.memory_config.get('enable_persistence', True),
-            max_memories=self.memory_config.get('max_memories', 1000)
+        long_memory_config = {
+            'use_amem': True,
+            'retriever_config': self.memory_config.get('retriever_config', {'use_api_embedding': True}),
+            'storage_dir': self.memory_config.get('storage_dir', "./memory_store"),
+            'enable_persistence': self.memory_config.get('enable_persistence', True),
+            'max_memories': self.memory_config.get('max_memories', 1000)
+        }
+
+        self.memory_manager = MemoryManager(
+            short_memory_config=short_memory_config,
+            long_memory_config=long_memory_config,
+            conversation_window_size=self.memory_config.get('conversation_window_size', 3)
         )
 
+        # Keep backward compatibility
+        self.short_memory = self.memory_manager.get_short_memory()
+        self.long_memory = self.memory_manager.get_long_memory()
+
         if self.verbose:
-            print("✅ Advanced memory systems initialized and ready")
+            print("✅ Unified memory system initialized and ready")
 
     def populate_memory_for_task(self, task_description: str, task_type: str = "general_task"):
         """
@@ -105,10 +117,10 @@ class SolverEmbodied:
         Returns:
             List of relevant memory objects
         """
-        if not self.enable_memory or not self.long_memory:
+        if not self.enable_memory or not self.memory_manager:
             return []
 
-        return self.long_memory.retrieve_memories(query, k)
+        return self.memory_manager.retrieve_relevant_memories(query, k)
 
     def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None, task_type: str = "general_task"):
         """
@@ -168,6 +180,11 @@ class SolverEmbodied:
 
             # [1] Analyze query
             query_start_time = time.time()
+
+            # Record user message to memory if memory system is enabled
+            if self.enable_memory and self.memory_manager:
+                self.memory_manager.add_message('user', question)
+
             relevant_memories = json_data.get("relevant_memories", [])
             print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
             if relevant_memories:
@@ -193,8 +210,16 @@ class SolverEmbodied:
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
+                # Record assistant message to memory if memory system is enabled
+                if self.enable_memory and self.memory_manager:
+                    self.memory_manager.add_message('assistant', direct_output)
+
             print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
             print(f"\n==> ✅ Query Solved!")
+
+        # Save memory state if memory system is enabled
+        if self.enable_memory and self.memory_manager:
+            self.memory_manager.save_state()
 
         return json_data
 

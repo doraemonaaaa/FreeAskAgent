@@ -227,6 +227,11 @@ class ChatOpenAI(EngineLM, CachedEngine):
             )
             response = response.output[1].content[0].text
 
+        # 确保响应不为None
+        if response is None:
+            print("Warning: LLM returned None response, this should not happen")
+            return "LLM returned empty response"
+
         if self.use_cache:
             self._save_cache(cache_key, response)
         return response
