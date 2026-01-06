@@ -2,7 +2,7 @@ import os
 import sys
 import json
 
-from agentflow.agentflow.tools.sam_perception.tool import SAM2_Perception_Tool
+from agentflow.agents.tools.sam_perception.tool import SAM2_Perception_Tool
 
 # 初始化SAM2工具（可选模型：sam2.1_hiera_tiny, sam2.1_hiera_small, sam2.1_hiera_base_plus, sam2.1_hiera_large）
 tool = SAM2_Perception_Tool(
