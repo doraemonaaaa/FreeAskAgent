@@ -157,35 +157,8 @@ class Planner:
     def analyze_query(self, question: str, image: str, relevant_memories: Optional[List[Dict[str, Any]]] = None) -> str:
         image_info = get_image_info(image)
 
-        # Include relevant memories in query analysis
-        memory_context = ""
-        if relevant_memories:
-            memory_items = []
-            for mem in relevant_memories:
-                if isinstance(mem, dict):
-                    content = mem.get('original_content') or mem.get('content', '')
-                    # 检查 content 是否为字符串类型且非空， content 是从记忆条目中提取的原始内容
-                    if isinstance(content, str) and len(content.strip()) > 0:
-                        clean_content = content
-                        #内容清理，去除购物、一般、商务等无关信息
-                        if ' Shopping' in clean_content:
-                            clean_content = clean_content.split(' Shopping')[0]
-                        if ' general' in clean_content:
-                            clean_content = clean_content.split(' general')[0]
-                        if ' commerce' in clean_content:
-                            clean_content = clean_content.split(' commerce')[0]
-                        # 检查 clean_content 是否为非空的中文内容
-                        # 检查清理后的内容长度是否大于3个字符（避免太短的无意义内容）
-                        # 检查内容中是否包含中文字符（Unicode范围 \u4e00 到 \u9fff 涵盖了大部分中文字符）
-                        # 只有同时满足这两个条件的记忆内容才会被添加到 memory_items 列表中
-                        if len(clean_content.strip()) > 3 and any('\u4e00' <= char <= '\u9fff' for char in clean_content):
-                            memory_items.append(clean_content.strip())
 
-            if memory_items:
-                memory_context = "\n\n相关记忆信息：\n" + "\n".join([f"• {item}" for item in memory_items])
-                self.logger.debug(f"Including {len(memory_items)} memory items in query analysis")
-
-        query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info, memory_context)
+        query_prompt = QuerynalysisPrompt(self.available_tools, self.toolbox_metadata, question, image_info, "")
         input_data = [query_prompt]
         
         image_paths = normalize_image_paths(image)
