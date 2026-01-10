@@ -1,5 +1,5 @@
 {memory_context}
 
-用户问题：{question}
+User query: {question}
 
-请基于上述的已知信息直接回答用户的问题。如果已知信息中包含相关答案，请直接使用这些信息回答。
+Please answer concisely using only the provided information and image context. Provide a neutral, factual response in plain text and avoid speculation or sensitive content.

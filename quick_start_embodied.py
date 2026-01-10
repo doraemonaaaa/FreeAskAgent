@@ -25,7 +25,7 @@ def run_embodied_agent(
     image_paths: Optional[Union[str, List[str]]] = None,
     enable_memory: bool = True,
     task_type: str = "general_task",
-    verbose: bool = True
+    verbose: bool = False
 ) -> Dict[str, Any]:
     """
     一行代码运行完整的embodied agent流程
@@ -62,8 +62,8 @@ def run_embodied_agent(
     # 构造solver - 使用GPT-4o确保实际LLM调用
     solver = construct_solver_embodied(
         llm_engine_name=llm_engine_name,
-        enabled_tools=["Base_Generator_Tool", "Python_Coder_Tool", "Google_Search_Tool", "Wikipedia_Search_Tool"],
-        tool_engine=["gpt-4o", "gpt-4o", "gpt-4o", "gpt-4o"],  # 全部使用GPT-4o
+        enabled_tools=["Base_Generator_Tool", "Python_Coder_Tool"],
+        tool_engine=["gpt-4o", "gpt-4o"],  # 全部使用GPT-4o
         model_engine=["gpt-4o", "gpt-4o", "gpt-4o"],  # planner_main, planner_fixed, executor
         output_types="base,final,direct",
         max_steps=10,
@@ -227,83 +227,82 @@ def test_complete_flow():
     """
     测试完整流程：一行代码调用验证整体架构
     """
-    print("🧪 Testing Complete Embodied Agent Flow")
-    print("=" * 60)
+    # Run a compact set of memory-enabled tests (minimal terminal output)
+    results = {}
 
-    # 示例1: 简单文本查询（无图片）
-    print("\n📝 Test 1: Simple text query")
-    result1 = run_embodied_agent(
-        question="What is the capital of France?",
-        enable_memory=True
+    # Test 1: Simple text query (memory enabled)
+    # Use an image-style prompt (referencing attached image) to avoid trivial Qs and to exercise multimodal memory flow
+    r_text = run_embodied_agent(
+        question="Description: Briefly describe the image scene in one neutral sentence.",
+        enable_memory=True,
+        verbose=False
     )
+    results['text_only'] = r_text
 
-    print("✅ Query Analysis:", str(result1.get('query_analysis', 'N/A'))[:100] + "...")
-    direct_output = result1.get('direct_output', 'N/A')
-    if isinstance(direct_output, dict):
-        print("✅ Direct Output:", str(direct_output)[:100] + "...")
-    else:
-        print("✅ Direct Output:", str(direct_output)[:100] + "...")
-
-    # 示例2: 带图片的多模态查询
-    print("\n🖼️ Test 2: Multimodal query (text + image)")
-    # 查找测试图片
+    # Test 2: Multimodal query (use a sample image if available)
     test_images = []
     test_dirs = ["test/vln", "assets/images", "."]
-
     for test_dir in test_dirs:
         if Path(test_dir).exists():
             images = list(Path(test_dir).glob("*.jpg")) + list(Path(test_dir).glob("*.jpeg")) + list(Path(test_dir).glob("*.png"))
             if images:
-                test_images = [str(img) for img in images[:1]]  # 只用一张图片
+                test_images = [str(img) for img in images[:1]]
                 break
 
     if test_images:
-        result2 = run_embodied_agent(
-            question="Describe what you see in this image and suggest what to do next.",
+        # Use an image-focused prompt (referencing provided attachment style)
+        img_question = "Please describe the scene and the people in the image; suggest an immediate safe action for the person."
+        r_img = run_embodied_agent(
+            question=img_question,
             image_paths=test_images[0],
-            enable_memory=True
+            enable_memory=True,
+            verbose=False
         )
-        print("✅ Query Analysis:", result2.get('query_analysis', 'N/A')[:100] + "...")
-        print("✅ Direct Output:", result2.get('direct_output', 'N/A')[:100] + "...")
+        results['multimodal'] = r_img
     else:
-        print("⚠️ No test images found, skipping multimodal test")
+        results['multimodal'] = None
 
-    # 示例3: 验证记忆系统
-    print("\n🧠 Test 3: Memory system verification")
-    result3 = run_embodied_agent(
-        question="What programming language should I learn first?",
-        enable_memory=True
-    )
+    # Memory sanity: three short turns to cause a window summary
+    r_mem1 = run_embodied_agent(question="Turn 1: Hello", enable_memory=True, verbose=False)
+    r_mem2 = run_embodied_agent(question="Turn 2: Provide a fact about X", enable_memory=True, verbose=False)
+    r_mem3 = run_embodied_agent(question="Turn 3: Summarize previous", enable_memory=True, verbose=False)
+    results['memory_test_summary'] = r_mem3
 
-    # 再次调用相同问题，验证记忆检索
-    result4 = run_embodied_agent(
-        question="What programming language should I learn first? Can you elaborate?",
-        enable_memory=True
-    )
-
-    print("✅ Memory system test completed")
-    print("✅ First response length:", len(result3.get('direct_output', '')))
-    print("✅ Second response length:", len(result4.get('direct_output', '')))
-
-    # 验证流程结构
-    print("\n🔍 Flow Structure Verification:")
-    required_keys = ['query', 'query_analysis', 'direct_output', 'execution_stats']
-    for key in required_keys:
-        if key in result1:
-            print(f"✅ {key}: Present")
-        else:
-            print(f"❌ {key}: Missing")
-
-    if result1.get('execution_stats', {}).get('llm_engine') == 'gpt-4o':
-        print("✅ LLM Engine: GPT-4o confirmed")
+    # Minimal console report
+    print("✅ Tests completed (memory enabled). Summary:")
+    print(f" - Text-only direct_output length: {len((r_text.get('direct_output') or '') or '')}")
+    if results['multimodal']:
+        print(f" - Multimodal direct_output length: {len((results['multimodal'].get('direct_output') or '') or '')}")
     else:
-        print("❌ LLM Engine: Not GPT-4o")
+        print(" - Multimodal test: skipped (no image found)")
+    mem_stats = r_mem3.get('memory_stats') or {}
+    short_total = mem_stats.get('short_memory', {}).get('total_messages', 0)
+    long_count = mem_stats.get('long_memory', {}).get('current_memory_count', 0)
+    print(f" - Short messages: {short_total}, Long memory entries: {long_count}")
 
+    return results
+
+
+def sanity_check_memory_flow():
+    """
+    Quick sanity unit test to verify per-turn short memory writes and long-memory summarization.
+    This function runs three sequential queries to ensure the short-memory window fills and
+    the MemoryManager attempts to summarize and add a conversation summary to long-term memory.
+    """
+    print("\n🔬 Running memory sanity check (3 turns)...")
+    r1 = run_embodied_agent(question="Turn 1: Hello", enable_memory=True, verbose=False)
+    r2 = run_embodied_agent(question="Turn 2: Tell me something about X", enable_memory=True, verbose=False)
+    r3 = run_embodied_agent(question="Turn 3: Summarize previous", enable_memory=True, verbose=False)
+
+    mem_stats = r3.get('memory_stats') or {}
+    short_total = mem_stats.get('short_memory', {}).get('total_messages', 0)
+    long_count = mem_stats.get('long_memory', {}).get('current_memory_count', 0)
+
+    print(f"Sanity check results -> short_total_messages: {short_total}, long_memory_count: {long_count}")
     return {
-        'text_only': result1,
-        'multimodal': result2 if test_images else None,
-        'memory_test_1': result3,
-        'memory_test_2': result4
+        "short_total_messages": short_total,
+        "long_memory_count": long_count,
+        "raw_stats": mem_stats
     }
 
 

@@ -1,12 +1,11 @@
 Context:
 Query: {question}
-Image: {image_info}{memory_context}
+Image info: {image_info}{memory_context}
 Actions Taken:
 {actions_taken}
 
-VLN Task Principle Prompt:
-{vln_prompt}
+Please provide a concise, neutral description and answer based only on the image info and any memory context. Avoid speculation and policy-sensitive content. Keep the response short (one or two paragraphs).
 
 Tools:
 Available tools: {available_tools}
-Metadata for the tools: {toolbox_metadata}
+Tool metadata: {toolbox_metadata}

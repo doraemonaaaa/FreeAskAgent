@@ -6,7 +6,20 @@ import signal
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from ..engine.factory import create_llm_engine
+from ..engine.factory import create_llm_engine as _create_llm_engine
+
+# Local wrapper to force using OpenAI models only.
+def create_openai_engine(model_string: str = None, **kwargs):
+    """
+    Wrapper around factory.create_llm_engine that ensures an OpenAI-compatible
+    model string is used so only OpenAI backends are selected.
+    """
+    # Prefer explicit model_string if it already references gpt/OpenAI; otherwise default to gpt-4o
+    if model_string and any(x in model_string for x in ["gpt", "o1", "o3", "o4"]):
+        ms = model_string
+    else:
+        ms = "gpt-4o"
+    return _create_llm_engine(model_string=ms, **kwargs)
 from ..models_embodied.formatters import ToolCommand
 
 # Tool name mapping: Static fallback mapping (long external names to internal)
@@ -68,10 +81,11 @@ class Executor:
         # Store the tool instances cache
         self.tool_instances_cache = tool_instances_cache if tool_instances_cache is not None else {}
 
+        # Use OpenAI-only wrapper to create LLM generator
         if base_url is not None:
-            self.llm_generate_tool_command = create_llm_engine(model_string=self.llm_engine_name, is_multimodal=False, base_url=self.base_url, temperature = self.temperature)
+            self.llm_generate_tool_command = create_openai_engine(model_string=self.llm_engine_name, is_multimodal=False, base_url=self.base_url, temperature=self.temperature)
         else:
-            self.llm_generate_tool_command = create_llm_engine(model_string=self.llm_engine_name, is_multimodal=False, temperature = self.temperature)
+            self.llm_generate_tool_command = create_openai_engine(model_string=self.llm_engine_name, is_multimodal=False, temperature=self.temperature)
     
     def set_query_cache_dir(self, query_cache_dir):
         if query_cache_dir:

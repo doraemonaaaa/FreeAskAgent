@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 import logging
+import json
 from pathlib import Path
 
 from .interfaces import ShortMemoryInterface, BaseMemoryComponent
@@ -105,6 +106,12 @@ class ShortMemory(BaseMemoryComponent, ShortMemoryInterface):
             raise ValueError("Number of files and descriptions must match")
 
         for fname, desc in zip(file_name, description):
+            # Ensure description is a safe string
+            if isinstance(desc, dict):
+                try:
+                    desc = json.dumps(desc, ensure_ascii=False)
+                except Exception:
+                    desc = str(desc)
             if len(self.files) >= self.max_files:
                 raise ValueError(f"Maximum files ({self.max_files}) exceeded")
             self.files.append({'file_name': fname, 'description': desc})

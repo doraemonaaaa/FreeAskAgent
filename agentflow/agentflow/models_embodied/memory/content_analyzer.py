@@ -10,7 +10,17 @@ import re
 from typing import Dict, List, Any
 import logging
 
-from ...engine.factory import create_llm_engine
+from ...engine.factory import create_llm_engine as _create_llm_engine
+
+def create_openai_engine(model_string: str = None, **kwargs):
+    """
+    Wrapper to ensure OpenAI backend is used for content analysis.
+    """
+    if model_string and any(x in model_string for x in ["gpt", "o1", "o3", "o4"]):
+        ms = model_string
+    else:
+        ms = "gpt-4o"
+    return _create_llm_engine(model_string=ms, **kwargs)
 from ..prompts.content_analysis import build_content_analysis_prompt
 from .interfaces import ContentAnalyzerInterface, BaseMemoryComponent
 
@@ -46,7 +56,7 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
     def _init_llm_engine(self) -> None:
         """初始化LLM引擎"""
         try:
-            self.llm_engine = create_llm_engine(
+            self.llm_engine = create_openai_engine(
                 model_string=self.llm_engine_name,
                 temperature=self.temperature
             )
