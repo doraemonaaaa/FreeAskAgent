@@ -121,53 +121,21 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
 
     def _extract_keywords_fallback(self, content: str) -> List[str]:
         if not content:
-            return ["general"]
+            return []
 
-        words = re.findall(r"[a-zA-Z]+", content.lower())
-        stop_words = {
-            "the", "and", "or", "for", "with", "that", "this", "from", "into",
-            "are", "was", "were", "is", "be", "been", "being", "of", "to", "in",
-            "on", "at", "by", "as", "it", "its", "an", "a"
-        }
-
-        keywords = [word for word in words if len(word) > 2 and word not in stop_words]
-        unique_keywords = list(dict.fromkeys(keywords))
-
-        return unique_keywords[:5] if unique_keywords else ["general"]
+        words = re.findall(r"[a-zA-Z0-9_]+", content.lower())
+        unique_keywords = list(dict.fromkeys(words))
+        return unique_keywords[:5]
 
     def _infer_context_fallback(self, content: str) -> str:
         if not content:
-            return "General content"
-
-        content_lower = content.lower()
-
-        if any(word in content_lower for word in ["store", "shopping", "mall", "market"]):
-            return "Shopping and location information"
-        if any(word in content_lower for word in ["technology", "code", "coding", "programming", "software"]):
-            return "Technology and programming related content"
-        if any(word in content_lower for word in ["learn", "learning", "education", "study"]):
-            return "Educational content"
-
-        return "General information content"
+            return "General"
+        return "General"
 
     def _generate_tags_fallback(self, content: str) -> List[str]:
-        tags = ["general"]
-
         if not content:
-            return tags
-
-        content_lower = content.lower()
-
-        if any(word in content_lower for word in ["location", "place", "address"]):
-            tags.extend(["location", "place"])
-        if any(word in content_lower for word in ["store", "shopping", "mall", "market"]):
-            tags.extend(["shopping", "commerce"])
-        if any(word in content_lower for word in ["technology", "code", "coding", "programming", "software"]):
-            tags.extend(["technology", "programming"])
-        if any(word in content_lower for word in ["learn", "learning", "education", "study"]):
-            tags.extend(["education", "learning"])
-
-        return list(dict.fromkeys(tags))
+            return []
+        return []
 
     def update_llm_engine(self, llm_engine_name: str, temperature: float = 0.3) -> None:
         """更新LLM引擎"""
