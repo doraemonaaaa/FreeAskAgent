@@ -173,21 +173,32 @@ class SolverEmbodied:
     
         def _format_memory_block(memories: list) -> str:
             if not memories:
-                return "None"
+                return ""
             lines = []
-            for mem in memories[:3]:
+            for mem in memories[:2]:
                 text = mem.get("original_content") or mem.get("content") or ""
                 if not isinstance(text, str):
                     text = str(text)
+                # Strip analyzer metadata and keep a short preview
+                text = re.split(r"\n?KEYWORDS:|\n?CONTEXT:|\n?TAGS:", text, maxsplit=1)[0]
+                text = re.sub(r"关键词:.*", "", text)
+                text = re.sub(r"主要内容:.*", "", text)
+                text = re.sub(r"对话记录:.*", "", text)
                 text = text.strip()
-                if text:
-                    lines.append(f"- {text}")
-            return "\n".join(lines) if lines else "None"
+                if not text:
+                    continue
+                if len(text) > 200:
+                    text = text[:200].rstrip() + "..."
+                lines.append(f"- {text}")
+            return "\n".join(lines)
 
         def _inject_memory_block(text: str, memories: list) -> str:
             if not text or "<<Mmeory>>" in text:
                 return text
-            memory_block = f"<<Mmeory>>:\n{_format_memory_block(memories)}\n"
+            memory_body = _format_memory_block(memories)
+            if not memory_body:
+                return text
+            memory_block = f"<<Mmeory>>:\n{memory_body}\n"
             if "<<Decision>>:" in text:
                 return text.replace("<<Decision>>:", f"{memory_block}\n<<Decision>>:", 1)
             if "<<Decision>>" in text:
