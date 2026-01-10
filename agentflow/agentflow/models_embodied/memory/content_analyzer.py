@@ -30,7 +30,18 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
         self.llm_engine = None
         self.llm_available = False
 
+        self._setup_logging()
         self._init_llm_engine()
+
+    def _setup_logging(self) -> None:
+        """设置日志"""
+        self.logger = logging.getLogger('ContentAnalyzer')
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
     def _init_llm_engine(self) -> None:
         """初始化LLM引擎"""

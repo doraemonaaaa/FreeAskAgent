@@ -56,6 +56,9 @@ class LongMemory(BaseMemoryComponent, LongMemoryInterface):
         if self.use_amem:
             self._init_amem_components()
 
+        # 设置日志
+        self._setup_logging()
+
         # 加载持久化状态
         if self.enable_persistence:
             self.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +92,16 @@ class LongMemory(BaseMemoryComponent, LongMemoryInterface):
             self.content_analyzer = ContentAnalyzer()
         except Exception:
             self.use_amem = False
+
+    def _setup_logging(self) -> None:
+        """设置日志"""
+        self.logger = logging.getLogger('LongMemory')
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
     def add_memory(self, content: str, memory_type: str = "custom",
                    metadata: Optional[Dict[str, Any]] = None) -> bool:
@@ -262,6 +275,62 @@ class LongMemory(BaseMemoryComponent, LongMemoryInterface):
             self.save_state()
 
         return cleared_count
+
+    def save_state(self) -> bool:
+        """保存记忆状态"""
+        if not self.enable_persistence:
+            return True
+
+        try:
+            state = {
+                'long_term_memories': self.long_term_memories,
+                'memory_metadata': self.memory_metadata,
+                'stats': self.stats,
+                'dedup_hashes': list(self._dedup_hashes),
+                'version': '1.0'
+            }
+
+            state_file = self.storage_dir / 'long_memory_state.json'
+            with open(state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, ensure_ascii=False, indent=2, default=str)
+
+            self.logger.info(f"Saved long memory state to {state_file}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to save long memory state: {e}")
+            return False
+
+    def load_state(self) -> bool:
+        """加载记忆状态"""
+        if not self.enable_persistence:
+            return True
+
+        try:
+            state_file = self.storage_dir / 'long_memory_state.json'
+            if not state_file.exists():
+                self.logger.info("No saved state file found, starting fresh")
+                return True
+
+            with open(state_file, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+
+            # 恢复状态
+            self.long_term_memories = state.get('long_term_memories', [])
+            self.memory_metadata = state.get('memory_metadata', [])
+            self.stats = state.get('stats', self._init_stats())
+            self._dedup_hashes = set(state.get('dedup_hashes', []))
+
+            # 重新初始化检索器
+            if self.retriever and self.long_term_memories:
+                self.retriever.add_documents(self.long_term_memories)
+
+            self.logger.info(f"Loaded long memory state from {state_file}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to load long memory state: {e}")
+            return False
 
     def _sanitize_content(self, text) -> str:
         """清理内容文本"""

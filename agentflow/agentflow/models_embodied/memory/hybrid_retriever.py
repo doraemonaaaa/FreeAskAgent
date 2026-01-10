@@ -6,7 +6,7 @@ Hybrid Retriever for A-MEM
 """
 
 import numpy as np
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 # 条件导入
 try:

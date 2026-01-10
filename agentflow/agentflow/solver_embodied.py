@@ -96,15 +96,9 @@ class SolverEmbodied:
 
         # Add task information to short-term memory
         self.short_memory.set_query(task_description)
-
-        # Add contextual memory to long-term memory for better retrieval
-        memory_content = f"Task: {task_description}"
-        if task_type == "navigation_task":
-            memory_content += ". Analyzing environment and planning navigation steps."
-        elif task_type == "analysis_task":
-            memory_content += ". Performing detailed analysis and reasoning."
-
-        self.long_memory.add_memory(memory_content, task_type)
+    # 不要每轮把 task 写入 long_memory，避免污染；
+    # long_memory 只存窗口总结（conversation_summary）
+        return    
 
     def retrieve_relevant_memories(self, query: str, k: int = 5) -> list:
         """
@@ -199,7 +193,7 @@ class SolverEmbodied:
 
             # Generate final output if requested
             if 'final' in self.output_types:
-                final_output = self.planner.generate_final_output(question, image_paths, self.memory)
+                final_output = self.planner.generate_direct_output(question, image_paths, self.memory, relevant_memories)
                 json_data["final_output"] = final_output
                 print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
 

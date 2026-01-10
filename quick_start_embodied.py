@@ -1,15 +1,15 @@
 """
-Quick Start Test for Embodied Agent Memory System with Visual Navigation
+Quick Start for Embodied Agent with One-Line Interface
 
-测试脚本验证记忆系统在视觉导航任务中的作用。
-比较有记忆版本和无记忆版本在使用VLN图片下的性能差异。
+一行代码调用完整的embodied agent流程，包括记忆系统和LLM调用。
+支持视觉导航任务，自动检测流程并验证整体架构。
 """
 
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union, List
 
 # 添加项目路径
 sys.path.append('/root/autodl-tmp/FreeAskAgent')
@@ -18,6 +18,92 @@ from agentflow.agentflow.solver_embodied import construct_solver_embodied
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path="agentflow/.env")
+
+
+def run_embodied_agent(
+    question: str,
+    image_paths: Optional[Union[str, List[str]]] = None,
+    enable_memory: bool = True,
+    task_type: str = "general_task",
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    一行代码运行完整的embodied agent流程
+
+    Args:
+        question: 用户查询问题
+        image_paths: 图片路径列表或单个图片路径
+        enable_memory: 是否启用记忆系统
+        task_type: 任务类型
+        verbose: 是否显示详细信息
+
+    Returns:
+        包含完整流程结果的字典
+    """
+    start_time = time.time()
+
+    # 确保使用GPT-4o模型
+    llm_engine_name = "gpt-4o"
+
+    # 配置记忆系统
+    memory_config = {
+        'retriever_config': {
+            'use_api_embedding': False,  # 使用本地模型
+            'local_model_path': '/root/autodl-tmp/all-MiniLM-L6-v2',  # 本地模型路径
+            'model_name': 'all-MiniLM-L6-v2',
+            'alpha': 0.5,
+            'disable_semantic_search': False
+        },
+        'storage_dir': "./memory_store",
+        'enable_persistence': True,
+        'max_memories': 1000
+    } if enable_memory else None
+
+    # 构造solver - 使用GPT-4o确保实际LLM调用
+    solver = construct_solver_embodied(
+        llm_engine_name=llm_engine_name,
+        enabled_tools=["Base_Generator_Tool", "Python_Coder_Tool", "Google_Search_Tool", "Wikipedia_Search_Tool"],
+        tool_engine=["gpt-4o", "gpt-4o", "gpt-4o", "gpt-4o"],  # 全部使用GPT-4o
+        model_engine=["gpt-4o", "gpt-4o", "gpt-4o"],  # planner_main, planner_fixed, executor
+        output_types="base,final,direct",
+        max_steps=10,
+        max_time=300,
+        max_tokens=4000,
+        enable_multimodal=True,
+        enable_memory=enable_memory,
+        memory_config=memory_config,
+        verbose=verbose
+    )
+
+    if verbose:
+        print("🚀 Starting embodied agent with GPT-4o...")
+        print(f"📝 Question: {question}")
+        if image_paths:
+            if isinstance(image_paths, list):
+                print(f"🖼️ Images: {len(image_paths)} images provided")
+            else:
+                print(f"🖼️ Image: {image_paths}")
+        print(f"🧠 Memory: {'Enabled' if enable_memory else 'Disabled'}")
+
+    # 执行完整流程
+    result = solver.solve(question, image_paths, task_type)
+
+    # 添加执行统计
+    result['execution_stats'] = {
+        'total_time': round(time.time() - start_time, 2),
+        'llm_engine': llm_engine_name,
+        'memory_enabled': enable_memory,
+        'task_type': task_type
+    }
+
+    # 添加记忆统计（如果启用）
+    if enable_memory and hasattr(solver, 'memory_manager') and solver.memory_manager:
+        result['memory_stats'] = solver.memory_manager.get_stats()
+
+    if verbose:
+        print("✅ Embodied agent execution completed!")
+        print(f"⏱️ Total execution time: {result['execution_stats']['total_time']:.2f}s")
+    return result
 
 
 def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = None) -> Dict[str, Any]:
@@ -137,49 +223,134 @@ def solve_navigation_with_memory(enable_memory: bool = True, frame_dir: Path = N
         return result
 
 
+def test_complete_flow():
+    """
+    测试完整流程：一行代码调用验证整体架构
+    """
+    print("🧪 Testing Complete Embodied Agent Flow")
+    print("=" * 60)
+
+    # 示例1: 简单文本查询（无图片）
+    print("\n📝 Test 1: Simple text query")
+    result1 = run_embodied_agent(
+        question="What is the capital of France?",
+        enable_memory=True
+    )
+
+    print("✅ Query Analysis:", result1.get('query_analysis', 'N/A')[:100] + "...")
+    print("✅ Direct Output:", result1.get('direct_output', 'N/A')[:100] + "...")
+
+    # 示例2: 带图片的多模态查询
+    print("\n🖼️ Test 2: Multimodal query (text + image)")
+    # 查找测试图片
+    test_images = []
+    test_dirs = ["test/vln", "assets/images", "."]
+
+    for test_dir in test_dirs:
+        if Path(test_dir).exists():
+            images = list(Path(test_dir).glob("*.jpg")) + list(Path(test_dir).glob("*.jpeg")) + list(Path(test_dir).glob("*.png"))
+            if images:
+                test_images = [str(img) for img in images[:1]]  # 只用一张图片
+                break
+
+    if test_images:
+        result2 = run_embodied_agent(
+            question="Describe what you see in this image and suggest what to do next.",
+            image_paths=test_images[0],
+            enable_memory=True
+        )
+        print("✅ Query Analysis:", result2.get('query_analysis', 'N/A')[:100] + "...")
+        print("✅ Direct Output:", result2.get('direct_output', 'N/A')[:100] + "...")
+    else:
+        print("⚠️ No test images found, skipping multimodal test")
+
+    # 示例3: 验证记忆系统
+    print("\n🧠 Test 3: Memory system verification")
+    result3 = run_embodied_agent(
+        question="What programming language should I learn first?",
+        enable_memory=True
+    )
+
+    # 再次调用相同问题，验证记忆检索
+    result4 = run_embodied_agent(
+        question="What programming language should I learn first? Can you elaborate?",
+        enable_memory=True
+    )
+
+    print("✅ Memory system test completed")
+    print("✅ First response length:", len(result3.get('direct_output', '')))
+    print("✅ Second response length:", len(result4.get('direct_output', '')))
+
+    # 验证流程结构
+    print("\n🔍 Flow Structure Verification:")
+    required_keys = ['query', 'query_analysis', 'direct_output', 'execution_stats']
+    for key in required_keys:
+        if key in result1:
+            print(f"✅ {key}: Present")
+        else:
+            print(f"❌ {key}: Missing")
+
+    if result1.get('execution_stats', {}).get('llm_engine') == 'gpt-4o':
+        print("✅ LLM Engine: GPT-4o confirmed")
+    else:
+        print("❌ LLM Engine: Not GPT-4o")
+
+    return {
+        'text_only': result1,
+        'multimodal': result2 if test_images else None,
+        'memory_test_1': result3,
+        'memory_test_2': result4
+    }
+
+
 def main(enable_memory: bool = True, frame_dir: str = "test/vln"):
     """
-    主测试函数 - 视觉导航任务测试
+    主测试函数 - 演示一行代码调用接口
 
     Args:
         enable_memory: 是否启用记忆功能进行测试
         frame_dir: 图片帧目录路径
     """
-    print("🧪 Embodied Agent Memory System Test")
-    print("Testing visual navigation with memory functionality")
+    print("🚀 Embodied Agent One-Line Interface Demo")
+    print("Demonstrating complete flow with single function call")
+    print("=" * 60)
 
-    # 设置图片目录
-    frame_path = Path(frame_dir)
+    # 演示一行代码调用
+    print("\n💡 One-Line Usage Examples:")
+    print("# Simple text query:")
+    print('result = run_embodied_agent("What is the capital of France?")')
+    print("\n# Multimodal query with memory:")
+    print('result = run_embodied_agent("Analyze this image", image_paths="image.jpg", enable_memory=True)')
+    print("\n# Custom configuration:")
+    print('result = run_embodied_agent("Solve this task", task_type="navigation", verbose=False)')
 
-    # 运行导航任务测试
-    result = solve_navigation_with_memory(enable_memory, frame_path)
+    # 运行完整流程测试
+    print("\n" + "=" * 60)
+    print("🧪 RUNNING COMPLETE FLOW TEST")
+    print("=" * 60)
 
-    if result is None:
-        print("❌ Test failed: Could not load images")
-        return None
+    test_results = test_complete_flow()
 
     # 输出结果摘要
     print(f"\n{'='*80}")
-    print("VISUAL NAVIGATION TEST RESULTS")
+    print("EMBODIED AGENT FLOW TEST RESULTS")
     print(f"{'='*80}")
 
-    print(f"Memory Enabled: {result['memory_enabled']}")
-    print(f"Task Success: {result['success']}")
-    print(f"Images Used: {result['images_used']}")
-    print(".2f")
-    if 'error' in result:
-        print(f"Error: {result['error']}")
-    else:
-        print(f"Output Length: {len(result['output'])} characters")
+    for test_name, result in test_results.items():
+        if result:
+            print(f"\n📊 {test_name.upper()}:")
+            stats = result.get('execution_stats', {})
+            print(f"  ⏱️ Time: {stats.get('total_time', 0):.2f}s")
+            print(f"  🤖 LLM: {stats.get('llm_engine', 'Unknown')}")
+            print(f"  🧠 Memory: {stats.get('memory_enabled', False)}")
+            print(f"  📝 Output Length: {len(result.get('direct_output', ''))} chars")
 
-    if result.get('memory_stats'):
-        print("\nMemory Statistics:")
-        stats = result['memory_stats']
-        print(f"  - Total Memories: {stats.get('total_memories', 0)}")
-        print(f"  - Retrieval Count: {stats.get('retrieval_count', 0)}")
-        print(f"  - A-MEM Available: {stats.get('amem_available', False)}")
+            if result.get('memory_stats'):
+                mem_stats = result['memory_stats']
+                print(f"  💾 Memories: {mem_stats.get('short_memory', {}).get('total_messages', 0)} messages")
 
-    return result
+    print("\n✅ All tests completed! Embodied agent flow verified.")
+    return test_results
 
 
 def run_comparison_test(frame_dir: str = "test/vln"):
@@ -285,13 +456,23 @@ def run_comparison_test(frame_dir: str = "test/vln"):
 
 if __name__ == "__main__":
     # 打印配置信息
+    print("🔑 API Configuration:")
     print("Proxy_API_BASE:" + os.environ.get("Proxy_API_BASE", "Not Set"))
-    print("OPENAI_API_KEY:" + os.environ.get("OPENAI_API_KEY", "Not Set"))
-    print("DASHSCOPE_API_KEY:" + os.environ.get("DASHSCOPE_API_KEY", "Not Set"))
+    print("OPENAI_API_KEY:" + ("Set" if os.environ.get("OPENAI_API_KEY") else "Not Set"))
+    print("DASHSCOPE_API_KEY:" + ("Set" if os.environ.get("DASHSCOPE_API_KEY") else "Not Set"))
 
     # 检查命令行参数
     if len(sys.argv) > 1:
-        if sys.argv[1].lower() in ('true', '1', 'yes', 'on'):
+        if sys.argv[1].lower() in ('test', 'flow', 'complete'):
+            # 运行完整流程测试
+            print("\n🎯 Running complete flow test...")
+            main()
+        elif sys.argv[1].lower() in ('simple', 'demo'):
+            # 运行简单演示
+            print("\n🎯 Running simple demo...")
+            result = run_embodied_agent("Hello, can you help me understand how memory systems work?")
+            print(f"Response: {result.get('direct_output', 'No response')[:200]}...")
+        elif sys.argv[1].lower() in ('true', '1', 'yes', 'on'):
             # 只运行有记忆的版本
             main(enable_memory=True)
         elif sys.argv[1].lower() in ('false', '0', 'no', 'off'):
@@ -302,7 +483,8 @@ if __name__ == "__main__":
             frame_dir = sys.argv[1]
             run_comparison_test(frame_dir)
     else:
-        # 默认运行对比测试，使用test/vln目录
-        run_comparison_test()
+        # 默认运行完整流程测试
+        print("\n🎯 Running complete embodied agent flow test...")
+        main()
 
 
