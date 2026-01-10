@@ -230,7 +230,7 @@ class Planner:
                 question=question,
                 image_info=image_info,
                 memory_context=memory_context,
-                actions_taken=str(memory.get_actions()),
+                actions_taken=str(memory.actions),
                 available_tools=str(self.available_tools),
                 toolbox_metadata=str(self.toolbox_metadata)
             )

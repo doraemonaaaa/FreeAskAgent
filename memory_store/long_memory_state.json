@@ -1,0 +1,19 @@
+{
+  "long_term_memories": [],
+  "memory_metadata": [],
+  "stats": {
+    "total_memories": 0,
+    "retrieval_count": 0,
+    "avg_retrieval_time": 0.0,
+    "amem_enabled": true,
+    "performance_metrics": {
+      "retrieval_times": [],
+      "error_count": 0,
+      "success_rate": 1.0
+    },
+    "memory_types": {},
+    "retrieval_patterns": {}
+  },
+  "dedup_hashes": [],
+  "version": "1.0"
+}

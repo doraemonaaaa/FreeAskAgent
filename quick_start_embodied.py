@@ -17,7 +17,7 @@ sys.path.append('/root/autodl-tmp/FreeAskAgent')
 from agentflow.agentflow.solver_embodied import construct_solver_embodied
 
 from dotenv import load_dotenv
-load_dotenv(dotenv_path="agentflow/.env")
+load_dotenv(dotenv_path="/root/autodl-tmp/FreeAskAgent/agentflow/.env")
 
 
 def run_embodied_agent(
@@ -237,8 +237,12 @@ def test_complete_flow():
         enable_memory=True
     )
 
-    print("✅ Query Analysis:", result1.get('query_analysis', 'N/A')[:100] + "...")
-    print("✅ Direct Output:", result1.get('direct_output', 'N/A')[:100] + "...")
+    print("✅ Query Analysis:", str(result1.get('query_analysis', 'N/A'))[:100] + "...")
+    direct_output = result1.get('direct_output', 'N/A')
+    if isinstance(direct_output, dict):
+        print("✅ Direct Output:", str(direct_output)[:100] + "...")
+    else:
+        print("✅ Direct Output:", str(direct_output)[:100] + "...")
 
     # 示例2: 带图片的多模态查询
     print("\n🖼️ Test 2: Multimodal query (text + image)")
@@ -471,7 +475,11 @@ if __name__ == "__main__":
             # 运行简单演示
             print("\n🎯 Running simple demo...")
             result = run_embodied_agent("Hello, can you help me understand how memory systems work?")
-            print(f"Response: {result.get('direct_output', 'No response')[:200]}...")
+            direct_output = result.get('direct_output', 'No response')
+            if isinstance(direct_output, dict):
+                print(f"Response: {str(direct_output)[:200]}...")
+            else:
+                print(f"Response: {str(direct_output)[:200]}...")
         elif sys.argv[1].lower() in ('true', '1', 'yes', 'on'):
             # 只运行有记忆的版本
             main(enable_memory=True)
