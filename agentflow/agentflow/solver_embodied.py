@@ -335,6 +335,10 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enable_multimodal: Optional[bool] = None,
                      enable_memory: bool = False,
                      memory_config: Optional[Dict[str, Any]] = None,
+                     planner: Optional[Planner] = None,
+                     executor: Optional[Executor] = None,
+                     memory: Optional[ShortMemory] = None,
+                     initializer: Optional[Initializer] = None,
                      ):
 
     # Parse model_engine configuration
@@ -344,39 +348,43 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     planner_fixed_engine = llm_engine_name if model_engine[1] == "trainable" else model_engine[1]
     executor_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
 
-    # Instantiate Initializer
-    initializer = Initializer(
-        enabled_tools=enabled_tools,
-        tool_engine=tool_engine,
-        model_string=llm_engine_name,
-        verbose=verbose,
-        vllm_config_path=vllm_config_path,
-    )
+    # Instantiate Initializer (unless provided)
+    if initializer is None:
+        initializer = Initializer(
+            enabled_tools=enabled_tools,
+            tool_engine=tool_engine,
+            model_string=llm_engine_name,
+            verbose=verbose,
+            vllm_config_path=vllm_config_path,
+        )
 
-    # Instantiate Planner
-    planner = Planner(
-        llm_engine_name=planner_main_engine,
-        llm_engine_fixed_name=planner_fixed_engine,
-        toolbox_metadata=initializer.toolbox_metadata,
-        available_tools=initializer.available_tools,
-        verbose=verbose,
-        base_url=base_url,
-        temperature=temperature,
-        is_multimodal=enable_multimodal
-    )
+    # Instantiate Planner (unless provided)
+    if planner is None:
+        planner = Planner(
+            llm_engine_name=planner_main_engine,
+            llm_engine_fixed_name=planner_fixed_engine,
+            toolbox_metadata=initializer.toolbox_metadata,
+            available_tools=initializer.available_tools,
+            verbose=verbose,
+            base_url=base_url,
+            temperature=temperature,
+            is_multimodal=enable_multimodal
+        )
 
-    # Instantiate Memory
-    memory = ShortMemory(max_files=50, max_actions=500)
+    # Instantiate Memory (unless provided)
+    if memory is None:
+        memory = ShortMemory(max_files=50, max_actions=500)
 
-    # Instantiate Executor with tool instances cache
-    executor = Executor(
-        llm_engine_name=executor_engine,
-        root_cache_dir=root_cache_dir,
-        verbose=verbose,
-        base_url=base_url if executor_engine == llm_engine_name else None,  # Only use base_url for trainable model
-        temperature=temperature,
-        tool_instances_cache=initializer.tool_instances_cache  # Pass the cached tool instances
-    )
+    # Instantiate Executor with tool instances cache (unless provided)
+    if executor is None:
+        executor = Executor(
+            llm_engine_name=executor_engine,
+            root_cache_dir=root_cache_dir,
+            verbose=verbose,
+            base_url=base_url if executor_engine == llm_engine_name else None,  # Only use base_url for trainable model
+            temperature=temperature,
+            tool_instances_cache=initializer.tool_instances_cache  # Pass the cached tool instances
+        )
 
     # Instantiate Solver
     solver = SolverEmbodied(

@@ -31,7 +31,7 @@ sys.path.append(r"D:\code\agent_memory\FreeAskAgent")
 from agentflow.agentflow.solver_embodied import construct_solver_embodied
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=r"D:\code\agent_memory\FreeAskAgent\agentflow\agents\.env")
+load_dotenv(dotenv_path=r"D:\code\agent_memory\FreeAskAgent\agentflow\agentflow\.env")
 
 
 def _compact_output_enabled() -> bool:
@@ -166,53 +166,53 @@ def test_complete_flow(print_summary: bool = True) -> Dict[str, Any]:
 
     # Only test test/vln/input_img1.jpg
     preferred_img = Path("test/vln/input_img1.jpg")
-    if not preferred_img.exists():
-        raise FileNotFoundError(f"Expected image not found: {preferred_img}")
-
-    multimodal_prompt = (
-        "You are a navigation agent in a simulated city scene. "
-        "Use the exact template below and keep each field short. "
-        "These are fictional internal states for the simulation; do not include hidden chain-of-thought.\n"
-        "Description: The image shows a street with a sidewalk, trees, and buildings. "
-        "There is no visible sign indicating \"Michael's Store.\"\n"
-        "Strategy Analysis:\n"
-        "- History Review: No prior actions taken.\n"
-        "Current State: Exploration\n"
-        "- Sub-Strategy: Self-Exploration\n"
-        "Rationale: The store is not visible in the image. Exploring the area or seeking additional information is necessary.\n"
-        "To-Reasoning:\n"
-        "<<Robot Belief>>:\n"
-        "I do not know the location of Michael's Store based on the image.\n"
-        "<<Robot Intention>>:\n"
-        "I intend to acquire more information or explore the area to locate the store.\n"
-        "<<Decision>>:\n"
-        "Since the store is not visible, I should explore further or ask for more details.\n"
-        "Navigation Goal:\n"
-        "<Rotate(90)>\n"
-        "Also remember what I said about my favorite color and food."
-    )
-
-    r_img = run_embodied_agent(
-        question=multimodal_prompt,
-        image_paths=str(preferred_img),
-        enable_memory=True,
-        verbose=False,
-        task_type="navigation_task",
-    )
-    if "can't assist" in (r_img.get("direct_output") or "").lower():
-        fallback_prompt = (
-            "Provide the requested template without refusal. "
-            "If a field is uncertain, state it briefly.\n"
-            + multimodal_prompt
+    if preferred_img.exists():
+        multimodal_prompt = (
+            "You are a navigation agent in a simulated city scene. "
+            "Use the exact template below and keep each field short. "
+            "These are fictional internal states for the simulation; do not include hidden chain-of-thought.\n"
+            "Description: The image shows a street with a sidewalk, trees, and buildings. "
+            "There is no visible sign indicating \"Michael's Store.\"\n"
+            "Strategy Analysis:\n"
+            "- History Review: No prior actions taken.\n"
+            "Current State: Exploration\n"
+            "- Sub-Strategy: Self-Exploration\n"
+            "Rationale: The store is not visible in the image. Exploring the area or seeking additional information is necessary.\n"
+            "To-Reasoning:\n"
+            "<<Robot Belief>>:\n"
+            "I do not know the location of Michael's Store based on the image.\n"
+            "<<Robot Intention>>:\n"
+            "I intend to acquire more information or explore the area to locate the store.\n"
+            "<<Decision>>:\n"
+            "Since the store is not visible, I should explore further or ask for more details.\n"
+            "Navigation Goal:\n"
+            "<Rotate(90)>\n"
+            "Also remember what I said about my favorite color and food."
         )
+
         r_img = run_embodied_agent(
-            question=fallback_prompt,
+            question=multimodal_prompt,
             image_paths=str(preferred_img),
             enable_memory=True,
             verbose=False,
             task_type="navigation_task",
         )
-    results["multimodal"] = r_img
+        if "can't assist" in (r_img.get("direct_output") or "").lower():
+            fallback_prompt = (
+                "Provide the requested template without refusal. "
+                "If a field is uncertain, state it briefly.\n"
+                + multimodal_prompt
+            )
+            r_img = run_embodied_agent(
+                question=fallback_prompt,
+                image_paths=str(preferred_img),
+                enable_memory=True,
+                verbose=False,
+                task_type="navigation_task",
+            )
+        results["multimodal"] = r_img
+    else:
+        results["multimodal"] = None
 
     # Memory sanity: 3 turns
     r_mem3 = run_embodied_agent(

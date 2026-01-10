@@ -61,7 +61,20 @@
     "关键词: navigation agent, simulated city, store, exploration, street | 主要内容: The main topic involves a navigation agent operating within a simulated city environment, tasked with exploring streets to locate a specific store, aimed at users interested in virtual navigation or simulation technologies. | 对话记录: [01:20:47] USER: Turn 3: What did I say about my favorite color and food?\n[01:20:54] ASSISTANT: Based on the provided context, there is no specific information about your favorite color or food. The context primarily involves a navigation agent in a simulated city tasked with exploring a street to locate a store, which is unrelated to personal preferences such as favorite color or food.\n\nIf you have previously mentioned your favorite color and food in another conversation or context, that information is not available here. Please provide additional details or context if you would like assistance with a different query.\n\n<<Mmeory>>:\n- The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in th...\n- Description: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:20:37] ASSISTANT: The image depicts a street scene with a sidewa...\nKEYWORDS: navigation agent simulated city exploration store street\nCONTEXT: The main topic involves a navigation agent operating within a simulated city environment, tasked with exploring streets to locate a specific store, aimed at users interested in virtual navigation or simulation technologies.\nTAGS: virtual navigation simulation technology artificial intelligence urban exploration technology",
     "Based on the provided context, there is no specific information about your favorite color or food. The context primarily involves a navigation agent in a simulated city tasked with exploring a street to locate a store, which is unrelated to personal preferences such as favorite color or food.\nKEYWORDS: navigation agent simulated city exploring store\nCONTEXT: The main topic is the operation of a navigation agent within a simulated city environment, focusing on its task to explore streets and locate stores, intended for audiences interested in AI, robotics, or urban simulation technologies.\nTAGS: Artificial Intelligence Simulation Urban Exploration Robotics",
     "关键词: capital, France, Paris, geographical information | 主要内容: The main topic is geography, specifically identifying the capital of France as Paris, with the key point being the reliance on general knowledge for the answer, intended for an audience seeking factual information. | 对话记录: [01:21:05] USER: What is the capital of France?\n[01:21:26] ASSISTANT: The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this answer. Therefore, the response is based solely on widely accepted geographical information.\nKEYWORDS: capital France Paris geography information\nCONTEXT: The main topic is geography, focusing on identifying Paris as the capital of France, with the key point being the reliance on general knowledge for factual information, intended for an audience seeking straightforward geographical facts.\nTAGS: Geography General Knowledge Educational Content",
-    "The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this answer. Therefore, the response is based solely on widely accepted geographical information.\nKEYWORDS: capital France Paris geographical information\nCONTEXT: The main topic is the identification of the capital city of France, with the key point being that Paris is the widely accepted answer based on general geographical knowledge, intended for an audience seeking factual information.\nTAGS: Geography General Knowledge Information Retrieval"
+    "The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this answer. Therefore, the response is based solely on widely accepted geographical information.\nKEYWORDS: capital France Paris geographical information\nCONTEXT: The main topic is the identification of the capital city of France, with the key point being that Paris is the widely accepted answer based on general geographical knowledge, intended for an audience seeking factual information.\nTAGS: Geography General Knowledge Information Retrieval",
+    "关键词: geography, Paris, capital, France, preference | 主要内容: The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia. | 对话记录: [01:35:14] USER: Turn 1: My favorite color is blue.\n[01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.\n\nBased on the given context, the main topic is geography, with the key point being the identification of Paris as the capital of France. The query about a favorite color does not relate directly to this geographical information.\n\n<<Mmeory>>:\n- The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this ans...\n- [01:21:26] ASSISTANT: The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context tha...\nKEYWORDS: geography Paris capital France preference\nCONTEXT: The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia.\nTAGS: Geography Trivia Education Personal Preference",
+    "The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.\nKEYWORDS: preference color geographical Paris capital France\nCONTEXT: The content contrasts a personal preference for the color blue with geographical information about Paris being the capital of France, aimed at providing factual knowledge without visual aids.\nTAGS: Geography Personal Preference Information Education",
+    "关键词: geography, Paris, sushi, preferences | 主要内容: The main topic is geography, with a focus on identifying Paris as the capital of France, while also incorporating personal preferences such as favorite food and color, aimed at individuals interested in geographical knowledge or trivia. | 对话记录: [01:35:29] USER: Turn 2: My favorite food is sushi.\n[01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch to the conversation.\n\nBased on the image info, which is empty, there is no visual content to analyze or describe. Therefore, the response is limited to the textual context provided, emphasizing the geographical aspect and personal preferences mentioned.\n\n<<Mmeory>>:\n- The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image...\n- [01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of Fran...\nKEYWORDS: geography Paris preferences sushi\nCONTEXT: The main topic is geography, focusing on identifying Paris as the capital of France, while incorporating personal preferences like favorite food and color, aimed at individuals interested in geographical knowledge or trivia.\nTAGS: Geography Personal Preferences Trivia Educational Conversation",
+    "The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch\nKEYWORDS: geography Paris France capital preferences sushi\nCONTEXT: The content discusses geography by identifying Paris as the capital of France, while also incorporating personal preferences like the color blue and sushi, aimed at individuals interested in geographical knowledge or trivia.\nTAGS: Geography Trivia Personal Preferences Educational Content",
+    "关键词: geography, Paris, capital, preferences, trivia | 主要内容: The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests. | 对话记录: [01:37:12] USER: Turn 1: My favorite color is blue.\n[01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.\n\nBased on the query and context, the main topic is geography, with an emphasis on Paris. The personal preferences mentioned serve to add a personal touch to the geographical discussion, making it more engaging for those interested in trivia or learning about different places.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food....\n- [01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sush...\nKEYWORDS: geography Paris capital preferences trivia\nCONTEXT: The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests.\nTAGS: Geography Trivia Personal Interests Educational Content Interactive Discussion",
+    "The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.\nKEYWORDS: geography Paris capital preferences color food sushi\nCONTEXT: The content discusses geographical knowledge, specifically Paris as the capital of France, while also incorporating personal preferences like favorite color and food, aimed at individuals interested in trivia and personal interests.\nTAGS: Geography Trivia Personal Interests Educational Content",
+    "关键词: sushi, Paris, geography, preferences, capital | 主要内容: The main topic is a blend of geographical trivia and personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests. | 对话记录: [01:37:27] USER: Turn 2: My favorite food is sushi.\n[01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.\n\nBased on the image info, which is empty, there is no additional visual context to consider. Therefore, the response is based solely on the textual information provided, emphasizing the geographical aspect of Paris and the personal preference for sushi.\n\n<<Mmeory>>:\n- The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite f...\n- [01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color...\nKEYWORDS: sushi Paris geography preferences capital\nCONTEXT: The content blends geographical trivia with personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests.\nTAGS: Geography Personal Preferences Trivia Food Conversation",
+    "The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.\nKEYWORDS: geography Paris capital France preferences sushi\nCONTEXT: The content discusses geography with a focus on Paris as the capital of France, while integrating personal preferences like favorite food and color to engage individuals interested in geographical trivia and personal interests.\nTAGS: Geography Personal Interests Trivia Conversation",
+    "关键词: navigation, simulation, street, exploration, perspective | 主要内容: The content involves a navigation agent in a simulated city scene tasked with exploring and identifying locations, with a focus on geographical elements and user preferences, aimed at enhancing the simulation experience. | 对话记录: [01:37:42] USER: You are a navigation agent in a simulated city scene. Use the exact template below and keep each field short. These are fictional internal states for the simulation; do not include hidden chain-of-thought.\nDescription: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more details.\n\nRegarding preferences, the user's favorite food is sushi, and the context includes geographical trivia about Paris being the capital of France.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite...\n- [01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food...\nKEYWORDS: navigation simulation exploration perspective geography\nCONTEXT: The content discusses a navigation agent in a simulated city tasked with exploring locations, focusing on geographical elements and user preferences to enhance the simulation experience, aimed at users interested in virtual exploration and geographic learning.\nTAGS: virtual reality geographic simulation user experience",
+    "The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more de\nKEYWORDS: street scene sidewalk trees buildings exploration navigation\nCONTEXT: The main topic is urban navigation and exploration, focusing on the challenge of locating a specific store without visible signage, suggesting the need for further exploration or perspective change. The intended audience is individuals interested in urban exploration or navigation strategies.\nTAGS: urban exploration navigation visual analysis perspective change",
+    "关键词: conversation, preferences, simulation, navigation, geographical elements | 主要内容: The main topic revolves around a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience. The intended audience is likely developers or users interested in simulation technology and user interaction. | 对话记录: [01:37:58] USER: Turn 3: What did I say about my favorite color and food?\n[01:38:05] ASSISTANT: Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a simulated city scene tasked with exploring and identifying locations, emphasizing geographical elements and user preferences to enhance the simulation experience.\n\nWithout specific details from the conversation history or image information, it is not possible to accurately answer the query about the user's favorite color and food. If you have access to the conversation history or additional context, reviewing those details would be necessary to provide an accurate response.\n\n<<Mmeory>>:\n- The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in th...\n- Description: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewa...\nKEYWORDS: simulation navigation preferences geographical elements city scene\nCONTEXT: The main topic is a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience, aimed at developers or users interested in simulation technology and user interaction.\nTAGS: simulation technology user interaction geographical navigation software development virtual environments",
+    "Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a si\nKEYWORDS: conversation preferences navigation agent\nCONTEXT: The main topic is a conversation involving a user's preferences about color and food, with a focus on a navigation agent's role in recalling or managing this information, aimed at users interacting with AI systems.\nTAGS: conversation analysis user preferences AI interaction navigation systems",
+    "关键词: capital, France, Paris, query, knowledge | 主要内容: The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information. | 对话记录: [01:38:15] USER: What is the capital of France?\n[01:38:20] ASSISTANT: The query asks for the capital of France, but the image info provided is empty, meaning there is no visual data to analyze or use in answering the question. Based on general knowledge, the capital of France is Paris. \n\nSince no actions have been taken and no tools have been used, the response is based solely on the query and general knowledge, without any additional context or image analysis.\nKEYWORDS: capital France Paris query knowledge\nCONTEXT: The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information.\nTAGS: Geography Information Retrieval General Knowledge Question and Answer"
   ],
   "memory_metadata": [
     {
@@ -1704,11 +1717,357 @@
       "timestamp": 1768065699.8106592,
       "added_at": "2026-01-11T01:21:39.810661",
       "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: geography, Paris, capital, France, preference | 主要内容: The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia. | 对话记录: [01:35:14] USER: Turn 1: My favorite color is blue.\n[01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.\n\nBased on the given context, the main topic is geography, with the key point being the identification of Paris as the capital of France. The query about a favorite color does not relate directly to this geographical information.\n\n<<Mmeory>>:\n- The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this ans...\n- [01:21:26] ASSISTANT: The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context tha...\nKEYWORDS: geography Paris capital France preference\nCONTEXT: The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia.\nTAGS: Geography Trivia Education Personal Preference",
+      "original_content": "关键词: geography, Paris, capital, France, preference | 主要内容: The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia. | 对话记录: [01:35:14] USER: Turn 1: My favorite color is blue.\n[01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.\n\nBased on the given context, the main topic is geography, with the key point being the identification of Paris as the capital of France. The query about a favorite color does not relate directly to this geographical information.\n\n<<Mmeory>>:\n- The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context that would alter this ans...\n- [01:21:26] ASSISTANT: The query asks for the capital of France. Based on general knowledge, the capital of France is Paris. The image info provided does not contain any specific details or context tha...",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "capital",
+          "France",
+          "preference"
+        ],
+        "context": "The main topic is geography, focusing on the identification of Paris as the capital of France, with a secondary mention of personal preference for the color blue; the intended audience is likely individuals seeking geographical knowledge or trivia.",
+        "tags": [
+          "Geography",
+          "Trivia",
+          "Education",
+          "Personal Preference"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066523.178294,
+      "added_at": "2026-01-11T01:35:23.178295",
+      "window_id": 0,
+      "session_id": "2e721e9f-e0d8-4177-a0df-969009451595",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:35:21.925934"
+    },
+    {
+      "content": "The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.\nKEYWORDS: preference color geographical Paris capital France\nCONTEXT: The content contrasts a personal preference for the color blue with geographical information about Paris being the capital of France, aimed at providing factual knowledge without visual aids.\nTAGS: Geography Personal Preference Information Education",
+      "original_content": "The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image information available to provide additional context or details.",
+      "analysis": {
+        "keywords": [
+          "preference",
+          "color",
+          "geographical",
+          "Paris",
+          "capital",
+          "France"
+        ],
+        "context": "The content contrasts a personal preference for the color blue with geographical information about Paris being the capital of France, aimed at providing factual knowledge without visual aids.",
+        "tags": [
+          "Geography",
+          "Personal Preference",
+          "Information",
+          "Education"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066524.4942708,
+      "added_at": "2026-01-11T01:35:24.494273",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: geography, Paris, sushi, preferences | 主要内容: The main topic is geography, with a focus on identifying Paris as the capital of France, while also incorporating personal preferences such as favorite food and color, aimed at individuals interested in geographical knowledge or trivia. | 对话记录: [01:35:29] USER: Turn 2: My favorite food is sushi.\n[01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch to the conversation.\n\nBased on the image info, which is empty, there is no visual content to analyze or describe. Therefore, the response is limited to the textual context provided, emphasizing the geographical aspect and personal preferences mentioned.\n\n<<Mmeory>>:\n- The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image...\n- [01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of Fran...\nKEYWORDS: geography Paris preferences sushi\nCONTEXT: The main topic is geography, focusing on identifying Paris as the capital of France, while incorporating personal preferences like favorite food and color, aimed at individuals interested in geographical knowledge or trivia.\nTAGS: Geography Personal Preferences Trivia Educational Conversation",
+      "original_content": "关键词: geography, Paris, sushi, preferences | 主要内容: The main topic is geography, with a focus on identifying Paris as the capital of France, while also incorporating personal preferences such as favorite food and color, aimed at individuals interested in geographical knowledge or trivia. | 对话记录: [01:35:29] USER: Turn 2: My favorite food is sushi.\n[01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch to the conversation.\n\nBased on the image info, which is empty, there is no visual content to analyze or describe. Therefore, the response is limited to the textual context provided, emphasizing the geographical aspect and personal preferences mentioned.\n\n<<Mmeory>>:\n- The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of France. There is no image...\n- [01:35:19] ASSISTANT: The query mentions a personal preference for the color blue, while the context provided focuses on geographical information, specifically identifying Paris as the capital of Fran...",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "preferences",
+          "sushi"
+        ],
+        "context": "The main topic is geography, focusing on identifying Paris as the capital of France, while incorporating personal preferences like favorite food and color, aimed at individuals interested in geographical knowledge or trivia.",
+        "tags": [
+          "Geography",
+          "Personal Preferences",
+          "Trivia",
+          "Educational",
+          "Conversation"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066600.5232284,
+      "added_at": "2026-01-11T01:36:40.523229",
+      "window_id": 0,
+      "session_id": "36ba2921-986a-464c-bd62-77581cfa2663",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:36:39.011047"
+    },
+    {
+      "content": "The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch\nKEYWORDS: geography Paris France capital preferences sushi\nCONTEXT: The content discusses geography by identifying Paris as the capital of France, while also incorporating personal preferences like the color blue and sushi, aimed at individuals interested in geographical knowledge or trivia.\nTAGS: Geography Trivia Personal Preferences Educational Content",
+      "original_content": "The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food. The intended audience appears to be individuals interested in geographical knowledge or trivia. The query about sushi does not directly relate to the main topic of geography but adds a personal touch",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "France",
+          "capital",
+          "preferences",
+          "sushi"
+        ],
+        "context": "The content discusses geography by identifying Paris as the capital of France, while also incorporating personal preferences like the color blue and sushi, aimed at individuals interested in geographical knowledge or trivia.",
+        "tags": [
+          "Geography",
+          "Trivia",
+          "Personal Preferences",
+          "Educational Content"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066602.3813035,
+      "added_at": "2026-01-11T01:36:42.381305",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: geography, Paris, capital, preferences, trivia | 主要内容: The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests. | 对话记录: [01:37:12] USER: Turn 1: My favorite color is blue.\n[01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.\n\nBased on the query and context, the main topic is geography, with an emphasis on Paris. The personal preferences mentioned serve to add a personal touch to the geographical discussion, making it more engaging for those interested in trivia or learning about different places.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food....\n- [01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sush...\nKEYWORDS: geography Paris capital preferences trivia\nCONTEXT: The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests.\nTAGS: Geography Trivia Personal Interests Educational Content Interactive Discussion",
+      "original_content": "关键词: geography, Paris, capital, preferences, trivia | 主要内容: The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests. | 对话记录: [01:37:12] USER: Turn 1: My favorite color is blue.\n[01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.\n\nBased on the query and context, the main topic is geography, with an emphasis on Paris. The personal preferences mentioned serve to add a personal touch to the geographical discussion, making it more engaging for those interested in trivia or learning about different places.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sushi as a favorite food....\n- [01:36:36] ASSISTANT: The context provided focuses on geography, specifically identifying Paris as the capital of France, and includes a mention of personal preferences such as the color blue and sush...",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "capital",
+          "preferences",
+          "trivia"
+        ],
+        "context": "The main topic is geography, focusing on Paris as the capital of France, while incorporating personal preferences like favorite color and food to engage individuals interested in geographical trivia and personal interests.",
+        "tags": [
+          "Geography",
+          "Trivia",
+          "Personal Interests",
+          "Educational Content",
+          "Interactive Discussion"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066641.3205645,
+      "added_at": "2026-01-11T01:37:21.320567",
+      "window_id": 0,
+      "session_id": "ff2d95b8-7476-4ad0-95a8-c72dc4d8848f",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:37:20.143692"
+    },
+    {
+      "content": "The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.\nKEYWORDS: geography Paris capital preferences color food sushi\nCONTEXT: The content discusses geographical knowledge, specifically Paris as the capital of France, while also incorporating personal preferences like favorite color and food, aimed at individuals interested in trivia and personal interests.\nTAGS: Geography Trivia Personal Interests Educational Content",
+      "original_content": "The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite food (sushi). This information is aimed at individuals interested in geographical knowledge or trivia, blending factual content with personal interests.",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "capital",
+          "preferences",
+          "color",
+          "food",
+          "sushi"
+        ],
+        "context": "The content discusses geographical knowledge, specifically Paris as the capital of France, while also incorporating personal preferences like favorite color and food, aimed at individuals interested in trivia and personal interests.",
+        "tags": [
+          "Geography",
+          "Trivia",
+          "Personal Interests",
+          "Educational Content"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066642.7225845,
+      "added_at": "2026-01-11T01:37:22.722586",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: sushi, Paris, geography, preferences, capital | 主要内容: The main topic is a blend of geographical trivia and personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests. | 对话记录: [01:37:27] USER: Turn 2: My favorite food is sushi.\n[01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.\n\nBased on the image info, which is empty, there is no additional visual context to consider. Therefore, the response is based solely on the textual information provided, emphasizing the geographical aspect of Paris and the personal preference for sushi.\n\n<<Mmeory>>:\n- The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite f...\n- [01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color...\nKEYWORDS: sushi Paris geography preferences capital\nCONTEXT: The content blends geographical trivia with personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests.\nTAGS: Geography Personal Preferences Trivia Food Conversation",
+      "original_content": "关键词: sushi, Paris, geography, preferences, capital | 主要内容: The main topic is a blend of geographical trivia and personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests. | 对话记录: [01:37:27] USER: Turn 2: My favorite food is sushi.\n[01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.\n\nBased on the image info, which is empty, there is no additional visual context to consider. Therefore, the response is based solely on the textual information provided, emphasizing the geographical aspect of Paris and the personal preference for sushi.\n\n<<Mmeory>>:\n- The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color (blue) and favorite f...\n- [01:37:17] ASSISTANT: The context provided highlights a focus on geography, specifically identifying Paris as the capital of France. It also incorporates personal preferences, such as a favorite color...",
+      "analysis": {
+        "keywords": [
+          "sushi",
+          "Paris",
+          "geography",
+          "preferences",
+          "capital"
+        ],
+        "context": "The content blends geographical trivia with personal preferences, focusing on Paris as the capital of France and the user's favorite food, sushi, aimed at engaging individuals interested in both geography and personal interests.",
+        "tags": [
+          "Geography",
+          "Personal Preferences",
+          "Trivia",
+          "Food",
+          "Conversation"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066656.1521356,
+      "added_at": "2026-01-11T01:37:36.152137",
+      "window_id": 0,
+      "session_id": "fecc414e-e938-410e-b2d2-5e9576f3cf48",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:37:34.518939"
+    },
+    {
+      "content": "The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.\nKEYWORDS: geography Paris capital France preferences sushi\nCONTEXT: The content discusses geography with a focus on Paris as the capital of France, while integrating personal preferences like favorite food and color to engage individuals interested in geographical trivia and personal interests.\nTAGS: Geography Personal Interests Trivia Conversation",
+      "original_content": "The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite food is sushi, as mentioned in Turn 2 of the conversation. This information is used to engage individuals interested in geographical trivia and personal interests.",
+      "analysis": {
+        "keywords": [
+          "geography",
+          "Paris",
+          "capital",
+          "France",
+          "preferences",
+          "sushi"
+        ],
+        "context": "The content discusses geography with a focus on Paris as the capital of France, while integrating personal preferences like favorite food and color to engage individuals interested in geographical trivia and personal interests.",
+        "tags": [
+          "Geography",
+          "Personal Interests",
+          "Trivia",
+          "Conversation"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066657.4447796,
+      "added_at": "2026-01-11T01:37:37.444781",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: navigation, simulation, street, exploration, perspective | 主要内容: The content involves a navigation agent in a simulated city scene tasked with exploring and identifying locations, with a focus on geographical elements and user preferences, aimed at enhancing the simulation experience. | 对话记录: [01:37:42] USER: You are a navigation agent in a simulated city scene. Use the exact template below and keep each field short. These are fictional internal states for the simulation; do not include hidden chain-of-thought.\nDescription: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more details.\n\nRegarding preferences, the user's favorite food is sushi, and the context includes geographical trivia about Paris being the capital of France.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite...\n- [01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food...\nKEYWORDS: navigation simulation exploration perspective geography\nCONTEXT: The content discusses a navigation agent in a simulated city tasked with exploring locations, focusing on geographical elements and user preferences to enhance the simulation experience, aimed at users interested in virtual exploration and geographic learning.\nTAGS: virtual reality geographic simulation user experience",
+      "original_content": "关键词: navigation, simulation, street, exploration, perspective | 主要内容: The content involves a navigation agent in a simulated city scene tasked with exploring and identifying locations, with a focus on geographical elements and user preferences, aimed at enhancing the simulation experience. | 对话记录: [01:37:42] USER: You are a navigation agent in a simulated city scene. Use the exact template below and keep each field short. These are fictional internal states for the simulation; do not include hidden chain-of-thought.\nDescription: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more details.\n\nRegarding preferences, the user's favorite food is sushi, and the context includes geographical trivia about Paris being the capital of France.\n\n<<Mmeory>>:\n- The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food. The user's favorite...\n- [01:37:32] ASSISTANT: The context provided focuses on geography, specifically highlighting Paris as the capital of France, while also incorporating personal preferences such as favorite color and food...",
+      "analysis": {
+        "keywords": [
+          "navigation",
+          "simulation",
+          "exploration",
+          "perspective",
+          "geography"
+        ],
+        "context": "The content discusses a navigation agent in a simulated city tasked with exploring locations, focusing on geographical elements and user preferences to enhance the simulation experience, aimed at users interested in virtual exploration and geographic learning.",
+        "tags": [
+          "virtual reality",
+          "geographic simulation",
+          "user experience"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066671.6363626,
+      "added_at": "2026-01-11T01:37:51.636364",
+      "window_id": 0,
+      "session_id": "da1abf38-154c-4338-81a9-8f1c090049d4",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:37:50.148103"
+    },
+    {
+      "content": "The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more de\nKEYWORDS: street scene sidewalk trees buildings exploration navigation\nCONTEXT: The main topic is urban navigation and exploration, focusing on the challenge of locating a specific store without visible signage, suggesting the need for further exploration or perspective change. The intended audience is individuals interested in urban exploration or navigation strategies.\nTAGS: urban exploration navigation visual analysis perspective change",
+      "original_content": "The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in the image, further exploration or acquiring additional information is necessary to locate the store. The navigation goal is to rotate 90 degrees to potentially gain a new perspective or discover more de",
+      "analysis": {
+        "keywords": [
+          "street scene",
+          "sidewalk",
+          "trees",
+          "buildings",
+          "exploration",
+          "navigation"
+        ],
+        "context": "The main topic is urban navigation and exploration, focusing on the challenge of locating a specific store without visible signage, suggesting the need for further exploration or perspective change. The intended audience is individuals interested in urban exploration or navigation strategies.",
+        "tags": [
+          "urban exploration",
+          "navigation",
+          "visual analysis",
+          "perspective change"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066673.9055738,
+      "added_at": "2026-01-11T01:37:53.905575",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: conversation, preferences, simulation, navigation, geographical elements | 主要内容: The main topic revolves around a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience. The intended audience is likely developers or users interested in simulation technology and user interaction. | 对话记录: [01:37:58] USER: Turn 3: What did I say about my favorite color and food?\n[01:38:05] ASSISTANT: Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a simulated city scene tasked with exploring and identifying locations, emphasizing geographical elements and user preferences to enhance the simulation experience.\n\nWithout specific details from the conversation history or image information, it is not possible to accurately answer the query about the user's favorite color and food. If you have access to the conversation history or additional context, reviewing those details would be necessary to provide an accurate response.\n\n<<Mmeory>>:\n- The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in th...\n- Description: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewa...\nKEYWORDS: simulation navigation preferences geographical elements city scene\nCONTEXT: The main topic is a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience, aimed at developers or users interested in simulation technology and user interaction.\nTAGS: simulation technology user interaction geographical navigation software development virtual environments",
+      "original_content": "关键词: conversation, preferences, simulation, navigation, geographical elements | 主要内容: The main topic revolves around a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience. The intended audience is likely developers or users interested in simulation technology and user interaction. | 对话记录: [01:37:58] USER: Turn 3: What did I say about my favorite color and food?\n[01:38:05] ASSISTANT: Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a simulated city scene tasked with exploring and identifying locations, emphasizing geographical elements and user preferences to enhance the simulation experience.\n\nWithout specific details from the conversation history or image information, it is not possible to accurately answer the query about the user's favorite color and food. If you have access to the conversation history or additional context, reviewing those details would be necessary to provide an accurate response.\n\n<<Mmeory>>:\n- The image depicts a street scene with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\" Given the current state of exploration and the absence of the store in th...\n- Description: The image shows a street with a sidewalk, trees, and buildings. There is no visible sign indicating \"Michael's Store.\"\n[01:37:47] ASSISTANT: The image depicts a street scene with a sidewa...",
+      "analysis": {
+        "keywords": [
+          "simulation",
+          "navigation",
+          "preferences",
+          "geographical elements",
+          "city scene"
+        ],
+        "context": "The main topic is a simulated city scene where a navigation agent explores locations based on user preferences, focusing on geographical elements to enhance the experience, aimed at developers or users interested in simulation technology and user interaction.",
+        "tags": [
+          "simulation technology",
+          "user interaction",
+          "geographical navigation",
+          "software development",
+          "virtual environments"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066689.3964527,
+      "added_at": "2026-01-11T01:38:09.396454",
+      "window_id": 0,
+      "session_id": "5b339c7e-f149-40c2-91d5-3d636158966f",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:38:07.222548"
+    },
+    {
+      "content": "Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a si\nKEYWORDS: conversation preferences navigation agent\nCONTEXT: The main topic is a conversation involving a user's preferences about color and food, with a focus on a navigation agent's role in recalling or managing this information, aimed at users interacting with AI systems.\nTAGS: conversation analysis user preferences AI interaction navigation systems",
+      "original_content": "Based on the context provided, the query \"Turn 3: What did I say about my favorite color and food?\" seems to be related to a previous conversation or interaction where the user mentioned their preferences regarding color and food. However, the available information does not include specific details about the user's favorite color or food. The context primarily focuses on a navigation agent in a si",
+      "analysis": {
+        "keywords": [
+          "conversation",
+          "preferences",
+          "navigation agent"
+        ],
+        "context": "The main topic is a conversation involving a user's preferences about color and food, with a focus on a navigation agent's role in recalling or managing this information, aimed at users interacting with AI systems.",
+        "tags": [
+          "conversation analysis",
+          "user preferences",
+          "AI interaction",
+          "navigation systems"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768066691.2145252,
+      "added_at": "2026-01-11T01:38:11.214526",
+      "source": "auto_extracted"
+    },
+    {
+      "content": "关键词: capital, France, Paris, query, knowledge | 主要内容: The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information. | 对话记录: [01:38:15] USER: What is the capital of France?\n[01:38:20] ASSISTANT: The query asks for the capital of France, but the image info provided is empty, meaning there is no visual data to analyze or use in answering the question. Based on general knowledge, the capital of France is Paris. \n\nSince no actions have been taken and no tools have been used, the response is based solely on the query and general knowledge, without any additional context or image analysis.\nKEYWORDS: capital France Paris query knowledge\nCONTEXT: The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information.\nTAGS: Geography Information Retrieval General Knowledge Question and Answer",
+      "original_content": "关键词: capital, France, Paris, query, knowledge | 主要内容: The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information. | 对话记录: [01:38:15] USER: What is the capital of France?\n[01:38:20] ASSISTANT: The query asks for the capital of France, but the image info provided is empty, meaning there is no visual data to analyze or use in answering the question. Based on general knowledge, the capital of France is Paris. \n\nSince no actions have been taken and no tools have been used, the response is based solely on the query and general knowledge, without any additional context or image analysis.",
+      "analysis": {
+        "keywords": [
+          "capital",
+          "France",
+          "Paris",
+          "query",
+          "knowledge"
+        ],
+        "context": "The main topic is a geographical query about the capital of France, with the key point being the identification of Paris as the capital based on general knowledge, intended for an audience seeking factual information.",
+        "tags": [
+          "Geography",
+          "Information Retrieval",
+          "General Knowledge",
+          "Question and Answer"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768066703.5000412,
+      "added_at": "2026-01-11T01:38:23.500042",
+      "window_id": 0,
+      "session_id": "f2399bc3-4b9a-4552-9ce6-bc9955653388",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T01:38:22.223361"
     }
   ],
   "stats": {
-    "total_memories": 62,
-    "retrieval_count": 23,
+    "total_memories": 75,
+    "retrieval_count": 29,
     "avg_retrieval_time": 0.0,
     "amem_enabled": true,
     "performance_metrics": {
@@ -1720,68 +2079,81 @@
     "retrieval_patterns": {}
   },
   "dedup_hashes": [
-    "d6fbf40795a743d353cee84d70e3e4a1",
-    "1c64f0cf1a15bcc679e6c9b784051de5",
-    "c5aacba12214c5e71e7f0de2e5e70a24",
-    "368980462274ee3c0e07029faaa31fa0",
-    "ad59c6ab18cd7f86e4555f9b5a9ad048",
-    "e24f4869e6243b80e1e4de05a66fa8b1",
-    "972108685ee7743d1e90dcbe143a9cc7",
-    "df2785b964d748ef4a64f836f0f4a631",
-    "47c008bbffd2187c355046359c787198",
-    "bdb3e5fca62a70414da3115cb2139d31",
-    "1417b2aca616f2bd5bb2e7ca422b3685",
-    "e996637eb266d143205b96ccda95ad41",
-    "d34a4d9e944d1ddfc2909ba893e3ad60",
-    "0681b07f3404307b5bcc0da6da519bef",
-    "84487327fb40006f074c59e9bfefe342",
-    "da18a07163a4c190ea3d1e5363aa8ebc",
-    "e60cccbeb35a8036acc507066a3df373",
-    "36a945b6d1b68c77001682129f00f8aa",
-    "bf97259938a27b03cf39e5509a006c82",
-    "a7c14b5d193d65d7908a138e4d6db222",
-    "60d069cdd9aafd31420307a37805c21c",
-    "2dbf9e4c91f5716e6e228acaae3195f2",
-    "3a6f086ec01a9852eef89c3ef9d49b31",
-    "729bb795f8ae8d6b3d01965654f206ea",
-    "ab504e446950edfa2fab9d9a81eac85d",
     "239e97a0f233d66782f31893975a77f4",
-    "668061ada2f9af566c2611a3dbc1b63b",
-    "8b509265268dfdbb7811d9526e16dd95",
-    "839431ccd77d43c70699f518b32ae6e7",
-    "6f16a5c4f0e6be667ce3bd47cc66d736",
+    "bdb3e5fca62a70414da3115cb2139d31",
+    "da18a07163a4c190ea3d1e5363aa8ebc",
+    "d6fbf40795a743d353cee84d70e3e4a1",
     "040c2da4646e8ace228259f39966cf1e",
-    "ff68b5caab9e7821715d0287829b6cc8",
-    "aa260d9d030a31febfa3b3c9114e2662",
-    "ba951443279f3642faccc68cc1891472",
-    "b4394feea7f61b47c1bfbff39494ebe2",
-    "ce776af07f44d26466888352ce1dfc3f",
-    "bfdfef3587af4ced0e05cd98348c5885",
-    "b28c4006370660203d59b05c66614b6a",
-    "d194bd248dd6286a6ab40eba96d09840",
-    "d500198d6ea75fce609c8879e0744be3",
-    "67fd70b69148ba6346e72eb37d4a4ecd",
-    "dca6493842027fb0a4185e9ed8c1a466",
-    "83bda48210b98b22a6ae480c7293dce6",
     "c7232e134adc94aadf2dba00ff1fbb8f",
-    "d3ce921929ceff645a345d01f9a51c94",
-    "bdf748ddae49ee00747662023da71793",
-    "05f051d7e576b598bec8303abe42c9e2",
-    "0ba8e541eb48b83845b92fede896d189",
-    "ff107b91369338511a52f0bf8ba0a935",
-    "a5bedf40cc0501fae2db1472e8af4f48",
-    "403ce5db08cf9495785a93a888faf8dc",
-    "05572fdd470002dffb70cafe46d716da",
-    "c4f3e1fe126aa11af32c39018d288a70",
-    "1dc8c1ffe290aa27f4afaad60f847a3f",
+    "ba951443279f3642faccc68cc1891472",
+    "839431ccd77d43c70699f518b32ae6e7",
+    "8b509265268dfdbb7811d9526e16dd95",
     "feed6a2e07203522bbc59cacedee704b",
+    "aa260d9d030a31febfa3b3c9114e2662",
+    "82ca95ec26bb7ed210364db6228486e1",
+    "d194bd248dd6286a6ab40eba96d09840",
+    "1fa3a1052d57e1642c354171a2a47b75",
+    "9095e828fa271a304158bd831d29c4df",
+    "a73d92a8efb1dc7c5fc3a852834a8c52",
+    "ff68b5caab9e7821715d0287829b6cc8",
     "cf2653e85426309630372f667fc5a358",
-    "4ecd74e6146ffd56a2ae87444d5ed15c",
+    "fe9aa839c7aca815fd79783eefb97c4a",
+    "83bda48210b98b22a6ae480c7293dce6",
+    "0681b07f3404307b5bcc0da6da519bef",
+    "2dbf9e4c91f5716e6e228acaae3195f2",
+    "05572fdd470002dffb70cafe46d716da",
+    "d500198d6ea75fce609c8879e0744be3",
+    "b4394feea7f61b47c1bfbff39494ebe2",
+    "05f051d7e576b598bec8303abe42c9e2",
+    "1c64f0cf1a15bcc679e6c9b784051de5",
+    "36a945b6d1b68c77001682129f00f8aa",
+    "e60cccbeb35a8036acc507066a3df373",
+    "df2785b964d748ef4a64f836f0f4a631",
     "a8884e504edbd78eeb4b7eac66694170",
+    "b80df0d3731279873b8a29a4c4d4c8e4",
+    "729bb795f8ae8d6b3d01965654f206ea",
+    "17f9a325f3c4ddcb232d8e4ca9058e50",
+    "668061ada2f9af566c2611a3dbc1b63b",
+    "bf97259938a27b03cf39e5509a006c82",
     "7b15ee530472a9431bda710ca32bcb6a",
-    "d176fad878b0cc5754088913e189d5ff",
+    "fd1e41ba859c4ba54bde1b8ccf87b5b8",
     "b179cc0bc0ff2bd75fbf66abf558c857",
-    "a73d92a8efb1dc7c5fc3a852834a8c52"
+    "a7c14b5d193d65d7908a138e4d6db222",
+    "c1f6b3bfd1ec0ea9aa94081fff539d80",
+    "c5aacba12214c5e71e7f0de2e5e70a24",
+    "28509e36f8af4b52ea96cdfc99930075",
+    "0ba8e541eb48b83845b92fede896d189",
+    "ad59c6ab18cd7f86e4555f9b5a9ad048",
+    "84487327fb40006f074c59e9bfefe342",
+    "972108685ee7743d1e90dcbe143a9cc7",
+    "3a6f086ec01a9852eef89c3ef9d49b31",
+    "b28c4006370660203d59b05c66614b6a",
+    "d3ce921929ceff645a345d01f9a51c94",
+    "ce776af07f44d26466888352ce1dfc3f",
+    "6f16a5c4f0e6be667ce3bd47cc66d736",
+    "d176fad878b0cc5754088913e189d5ff",
+    "bfdfef3587af4ced0e05cd98348c5885",
+    "4ecd74e6146ffd56a2ae87444d5ed15c",
+    "ab504e446950edfa2fab9d9a81eac85d",
+    "403ce5db08cf9495785a93a888faf8dc",
+    "ada0d94ce001068a3842ffca346904e9",
+    "e24f4869e6243b80e1e4de05a66fa8b1",
+    "a5bedf40cc0501fae2db1472e8af4f48",
+    "a610052f80e998be194de53f96248a66",
+    "dca6493842027fb0a4185e9ed8c1a466",
+    "1dc8c1ffe290aa27f4afaad60f847a3f",
+    "368980462274ee3c0e07029faaa31fa0",
+    "4aace3ad4d6913b1264d23fa5b602a45",
+    "e996637eb266d143205b96ccda95ad41",
+    "60d069cdd9aafd31420307a37805c21c",
+    "47c008bbffd2187c355046359c787198",
+    "bdf748ddae49ee00747662023da71793",
+    "ff107b91369338511a52f0bf8ba0a935",
+    "d34a4d9e944d1ddfc2909ba893e3ad60",
+    "4b77c8cac0d52dbe4a29b443eebbda54",
+    "67fd70b69148ba6346e72eb37d4a4ecd",
+    "c4f3e1fe126aa11af32c39018d288a70",
+    "1417b2aca616f2bd5bb2e7ca422b3685"
   ],
   "version": "1.0"
 }
