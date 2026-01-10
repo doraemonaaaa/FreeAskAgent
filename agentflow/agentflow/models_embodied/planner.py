@@ -5,18 +5,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from ..engine.factory import create_llm_engine as _create_llm_engine
-
-def create_openai_engine(model_string: str = None, **kwargs):
-    """
-    Wrapper to force using OpenAI-compatible models when initializing engines in the
-    models_embodied package. This prevents selection of local or other backends.
-    """
-    if model_string and any(x in model_string for x in ["gpt", "o1", "o3", "o4"]):
-        ms = model_string
-    else:
-        ms = "gpt-4o"
-    return _create_llm_engine(model_string=ms, **kwargs)
+from ..engine.factory import create_llm_engine
 from ..models_embodied.formatters import NextStep, QueryAnalysis
 from .memory.short_memory import ShortMemory
 from ..utils.utils import get_image_info, normalize_image_paths
@@ -88,12 +77,12 @@ class Planner:
 
         # 初始化LLM引擎
         try:
-            self.llm_engine_fixed = create_openai_engine(
+            self.llm_engine_fixed = create_llm_engine(
                 model_string=llm_engine_fixed_name,
                 is_multimodal=is_multimodal,
                 temperature=temperature
             )
-            self.llm_engine = create_openai_engine(
+            self.llm_engine = create_llm_engine(
                 model_string=llm_engine_name,
                 is_multimodal=is_multimodal,
                 base_url=base_url,

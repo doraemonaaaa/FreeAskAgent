@@ -66,6 +66,7 @@ class SolverEmbodied:
         long_memory_config = {
             'use_amem': True,
             'retriever_config': self.memory_config.get('retriever_config', {'use_api_embedding': True}),
+            'gate_config': self.memory_config.get('gate_config', {}),
             'storage_dir': self.memory_config.get('storage_dir', "./memory_store"),
             'enable_persistence': self.memory_config.get('enable_persistence', True),
             'max_memories': self.memory_config.get('max_memories', 1000)
@@ -149,10 +150,12 @@ class SolverEmbodied:
 
             # Retrieve relevant memories for context enhancement
             relevant_memories = self.retrieve_relevant_memories(question, k=3)
-            print(f"DEBUG: Retrieved {len(relevant_memories)} memories at solver level")
+            if self.verbose:
+                print(f"DEBUG: Retrieved {len(relevant_memories)} memories at solver level")
             if relevant_memories:
                 for i, mem in enumerate(relevant_memories[:2]):
-                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+                    if self.verbose:
+                        print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
             if relevant_memories and self.verbose:
                 print(f"📚 Retrieved {len(relevant_memories)} relevant memories for context")
             json_data["relevant_memories"] = relevant_memories
@@ -168,6 +171,29 @@ class SolverEmbodied:
         if set(self.output_types) == {'base'}:
             return json_data
     
+        def _format_memory_block(memories: list) -> str:
+            if not memories:
+                return "None"
+            lines = []
+            for mem in memories[:3]:
+                text = mem.get("original_content") or mem.get("content") or ""
+                if not isinstance(text, str):
+                    text = str(text)
+                text = text.strip()
+                if text:
+                    lines.append(f"- {text}")
+            return "\n".join(lines) if lines else "None"
+
+        def _inject_memory_block(text: str, memories: list) -> str:
+            if not text or "<<Mmeory>>" in text:
+                return text
+            memory_block = f"<<Mmeory>>:\n{_format_memory_block(memories)}\n"
+            if "<<Decision>>:" in text:
+                return text.replace("<<Decision>>:", f"{memory_block}\n<<Decision>>:", 1)
+            if "<<Decision>>" in text:
+                return text.replace("<<Decision>>", f"{memory_block}\n<<Decision>>", 1)
+            return text.rstrip() + "\n\n" + memory_block
+
         # Continue with query analysis and tool execution if final or direct responses are needed
         if {'final', 'direct'} & set(self.output_types):
             if self.verbose:
@@ -181,10 +207,12 @@ class SolverEmbodied:
                 self.memory_manager.add_message('user', question)
 
             relevant_memories = json_data.get("relevant_memories", [])
-            print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
+            if self.verbose:
+                print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
             if relevant_memories:
                 for i, mem in enumerate(relevant_memories[:2]):
-                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+                    if self.verbose:
+                        print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
             query_analysis = self.planner.analyze_query(question, image_paths, relevant_memories)
             json_data["query_analysis"] = query_analysis
             if self.verbose:
@@ -197,8 +225,6 @@ class SolverEmbodied:
                 # Attempt original prompt, then retry with progressively simpler fallbacks if blocked by content filters
                 fallback_prompts = [
                     question,
-                    f"{question} 请用一句话以 'Description:' 开头简要描述场景。",
-                    "请简要描述图像场景，最多一行，开头写 'Description:'。",
                     "Description: Brief one-line neutral description of the image scene."
                 ]
                 final_output = None
@@ -217,6 +243,7 @@ class SolverEmbodied:
                 if final_output is None:
                     # All fallbacks failed due to content filtering; surface a clear message
                     raise last_exception
+                final_output = _inject_memory_block(final_output, relevant_memories)
                 json_data["final_output"] = final_output
                 print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
 
@@ -226,8 +253,6 @@ class SolverEmbodied:
                 # Retry sequence for direct output similar to final_output
                 fallback_prompts = [
                     question,
-                    f"{question} 请用一句话以 'Description:' 开头简要描述场景。",
-                    "请简要描述图像场景，最多一行，开头写 'Description:'。",
                     "Description: Brief one-line neutral description of the image scene."
                 ]
                 direct_output = None
@@ -244,6 +269,7 @@ class SolverEmbodied:
                             print(f"⚠️ Direct prompt attempt {idx+1} was filtered; trying next fallback...")
                 if direct_output is None:
                     raise last_exception
+                direct_output = _inject_memory_block(direct_output, relevant_memories)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
@@ -272,9 +298,9 @@ class SolverEmbodied:
                 except Exception as _e:
                     if self.verbose:
                         print(f"Warning: failed to auto-save image description to memory: {_e}")
-
-            print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
-            print(f"\n==> ✅ Query Solved!")
+            if self.verbose:
+                print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
+                print("\n==> Query Solved!")
 
         # Save memory state if memory system is enabled
         if self.enable_memory and self.memory_manager:

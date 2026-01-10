@@ -10,17 +10,7 @@ import re
 from typing import Dict, List, Any
 import logging
 
-from ...engine.factory import create_llm_engine as _create_llm_engine
-
-def create_openai_engine(model_string: str = None, **kwargs):
-    """
-    Wrapper to ensure OpenAI backend is used for content analysis.
-    """
-    if model_string and any(x in model_string for x in ["gpt", "o1", "o3", "o4"]):
-        ms = model_string
-    else:
-        ms = "gpt-4o"
-    return _create_llm_engine(model_string=ms, **kwargs)
+from ...engine.factory import create_llm_engine
 from ..prompts.content_analysis import build_content_analysis_prompt
 from .interfaces import ContentAnalyzerInterface, BaseMemoryComponent
 
@@ -56,7 +46,7 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
     def _init_llm_engine(self) -> None:
         """初始化LLM引擎"""
         try:
-            self.llm_engine = create_openai_engine(
+            self.llm_engine = create_llm_engine(
                 model_string=self.llm_engine_name,
                 temperature=self.temperature
             )
@@ -123,7 +113,6 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
         }
 
     def _analyze_fallback(self, content: str) -> Dict[str, Any]:
-        """降级分析方法"""
         return {
             "keywords": self._extract_keywords_fallback(content),
             "context": self._infer_context_fallback(content),
@@ -131,36 +120,37 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
         }
 
     def _extract_keywords_fallback(self, content: str) -> List[str]:
-        """降级关键词提取"""
         if not content:
             return ["general"]
 
-        words = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z]+', content.lower())
-        stop_words = {'的', '了', '和', '是', '就', '都', '而', '及', '与', '着', '或'}
+        words = re.findall(r"[a-zA-Z]+", content.lower())
+        stop_words = {
+            "the", "and", "or", "for", "with", "that", "this", "from", "into",
+            "are", "was", "were", "is", "be", "been", "being", "of", "to", "in",
+            "on", "at", "by", "as", "it", "its", "an", "a"
+        }
 
-        keywords = [word for word in words if len(word) > 1 and word not in stop_words]
+        keywords = [word for word in words if len(word) > 2 and word not in stop_words]
         unique_keywords = list(dict.fromkeys(keywords))
 
         return unique_keywords[:5] if unique_keywords else ["general"]
 
     def _infer_context_fallback(self, content: str) -> str:
-        """降级上下文推断"""
         if not content:
             return "General content"
 
         content_lower = content.lower()
 
-        if any(word in content_lower for word in ['时代广场', '超市', '购物']):
+        if any(word in content_lower for word in ["store", "shopping", "mall", "market"]):
             return "Shopping and location information"
-        elif any(word in content_lower for word in ['技术', '代码', '编程']):
+        if any(word in content_lower for word in ["technology", "code", "coding", "programming", "software"]):
             return "Technology and programming related content"
-        elif any(word in content_lower for word in ['学习', '教育']):
+        if any(word in content_lower for word in ["learn", "learning", "education", "study"]):
             return "Educational content"
-        else:
-            return "General information content"
+
+        return "General information content"
 
     def _generate_tags_fallback(self, content: str) -> List[str]:
-        """降级标签生成"""
         tags = ["general"]
 
         if not content:
@@ -168,13 +158,13 @@ class ContentAnalyzer(BaseMemoryComponent, ContentAnalyzerInterface):
 
         content_lower = content.lower()
 
-        if any(word in content_lower for word in ['时代广场', '地点', '位置']):
+        if any(word in content_lower for word in ["location", "place", "address"]):
             tags.extend(["location", "place"])
-        if any(word in content_lower for word in ['超市', '购物', '商场']):
+        if any(word in content_lower for word in ["store", "shopping", "mall", "market"]):
             tags.extend(["shopping", "commerce"])
-        if any(word in content_lower for word in ['技术', '代码', '编程']):
+        if any(word in content_lower for word in ["technology", "code", "coding", "programming", "software"]):
             tags.extend(["technology", "programming"])
-        if any(word in content_lower for word in ['学习', '教育']):
+        if any(word in content_lower for word in ["learn", "learning", "education", "study"]):
             tags.extend(["education", "learning"])
 
         return list(dict.fromkeys(tags))

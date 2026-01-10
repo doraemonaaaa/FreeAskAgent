@@ -148,7 +148,7 @@ class Initializer:
 
                 try:
                     # Read the tool.py file and extract TOOL_NAME
-                    with open(tool_file_path, 'r') as f:
+                    with open(tool_file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read()
 
                     # Extract TOOL_NAME using simple string parsing
@@ -382,8 +382,34 @@ class Initializer:
                 # Get the tool class
                 tool_class = getattr(module, class_name)
 
-                # Instantiate the tool
-                tool_instance = tool_class()
+                # Instantiate the tool, honoring configured engine if provided
+                tool_index = -1
+                current_dir_name = dir_name
+                for i, enabled_tool_name in enumerate(self.enabled_tools):
+                    if hasattr(self, 'tool_name_mapping'):
+                        short_to_long = self.tool_name_mapping.get('short_to_long', {})
+                        long_to_internal = self.tool_name_mapping.get('long_to_internal', {})
+
+                        long_name = short_to_long.get(enabled_tool_name, enabled_tool_name)
+                        if long_name in long_to_internal:
+                            if long_to_internal[long_name]["dir_name"] == current_dir_name:
+                                tool_index = i
+                                break
+
+                    if enabled_tool_name.lower().replace('_tool', '') == current_dir_name:
+                        tool_index = i
+                        break
+
+                if tool_index >= 0 and tool_index < len(self.tool_engine):
+                    engine = self.tool_engine[tool_index]
+                    if engine == "Default":
+                        tool_instance = tool_class()
+                    elif engine == "self":
+                        tool_instance = tool_class(model_string=self.model_string)
+                    else:
+                        tool_instance = tool_class(model_string=engine)
+                else:
+                    tool_instance = tool_class()
 
                 # FIXME This is a temporary workaround to avoid running demo commands
                 self.available_tools.append(tool_name)

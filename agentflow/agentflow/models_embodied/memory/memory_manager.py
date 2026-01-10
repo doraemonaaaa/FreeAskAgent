@@ -55,9 +55,10 @@ class MemoryManager:
         # 检索门控配置
         gate = long_config.get("gate_config", {})
         self.retrieve_gate_patterns = gate.get("retrieve_gate_patterns") or [
-            r"长期记忆", r"记忆", r"我叫", r"我在", r"项目代号", r"偏好", r"规则"
+            r"remember", r"recall", r"previous", r"earlier", r"last time",
+            r"summary", r"summarize", r"my name", r"my favorite", r"i told you", r"i said"
         ]
-        self.retrieve_gate_min_len = int(gate.get("retrieve_gate_min_len", 8))
+        self.retrieve_gate_min_len = int(gate.get("retrieve_gate_min_len", 4))
 
         # 设置日志
         self.logger = logging.getLogger('MemoryManager')
