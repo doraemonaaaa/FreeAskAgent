@@ -1,11 +1,8 @@
 from typing import Any, List, Dict, Optional
-from .tom import TOM_CORE_PROMPT
 
-def QuerynalysisPrompt(available_tools: List[str], toolbox_metadata: Dict[str, Dict[str, Any]], question: str, image_info: Optional[str] = None) -> str:
+def QuerynalysisPrompt(available_tools: List[str], toolbox_metadata: Dict[str, Dict[str, Any]], question: str, image_info: Optional[str] = None, memory_context: Optional[str] = None) -> str:
     if image_info:
         return f"""
-Analysis principles:{TOM_CORE_PROMPT}
-
 Task: Analyze the given query with accompanying inputs and determine the skills and tools needed to address it effectively.
 
 Available tools: {available_tools}
@@ -13,6 +10,8 @@ Available tools: {available_tools}
 Metadata for the tools: {toolbox_metadata}
 
 Image: {image_info}
+
+Memory Context: {memory_context}
 
 Query: {question}
 
@@ -31,14 +30,14 @@ Your response should include:
 
 Please present your analysis in a clear, structured format.
 """
-    else: 
+    else:
         return f"""
 Task: Analyze the given query to determine necessary skills and tools.
 
 Inputs:
 - Query: {question}
 - Available tools: {available_tools}
-- Metadata for tools: {toolbox_metadata}
+- Metadata for tools: {toolbox_metadata}{memory_context or ''}
 
 Instructions:
 1. Identify the main objectives in the query.
@@ -48,7 +47,7 @@ Instructions:
 
 Format your response with a summary of the query, lists of skills and tools with explanations, and a section for additional considerations.
 
-Be biref and precise with insight. 
+Be biref and precise with insight.
 
 Embodied Task Perception and Query Analysis:
 If the query involves embodied tasks (e.g., navigation, object manipulation), consider the following:

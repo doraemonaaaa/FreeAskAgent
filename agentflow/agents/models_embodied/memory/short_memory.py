@@ -2,50 +2,61 @@
 Short Term Memory for Embodied Agent
 
 短期记忆模块，负责当前会话的查询、文件和动作管理。
-提供基础的记忆容器功能，支持文件类型自动识别。
+提供基础的记忆容器功能，支持文件类型自动识别和对话记录管理。
 """
 
-from typing import Dict, Any, List, Union, Optional
+from typing import Dict, Any, List, Union, Optional, Tuple
 import os
+import time
+import uuid
+import logging
+import json
+from pathlib import Path
+
+from .interfaces import ShortMemoryInterface, BaseMemoryComponent
 
 
-class ShortMemory:
+class ShortMemory(BaseMemoryComponent, ShortMemoryInterface):
     """
-    短期记忆类
+    短期记忆类 - 简洁实现
 
     负责管理当前会话的查询、文件列表和动作记录。
-    提供基本的CRUD操作接口，支持多种文件类型的自动识别。
+    支持对话窗口管理和自动滚动。
     """
 
-    def __init__(self, max_files: int = 100, max_actions: int = 1000):
-        """
-        初始化短期记忆
+    def __init__(self, max_files: int = 100, max_actions: int = 1000,
+                 conversation_window_size: int = 3, enable_persistence: bool = False):
+        super().__init__(enable_persistence)
 
-        Args:
-            max_files: 最大文件数量限制
-            max_actions: 最大动作记录数量限制
-        """
+        # 核心配置
         self.max_files = max_files
         self.max_actions = max_actions
+        self.conversation_window_size = conversation_window_size
 
+        # 数据存储
         self.query: Optional[str] = None
         self.files: List[Dict[str, str]] = []
-        self.actions: Dict[str, Dict[str, Any]] = {}
+        self.actions: Dict[str, Dict[str, Any]] = []
+        self.conversation_history: List[Dict[str, Any]] = []
+        self.current_window: List[Dict[str, Any]] = []
+
+        # 会话管理
+        self.session_id: str = str(uuid.uuid4())
+        self.window_count: int = 0
+        self._pending_summary: Optional[Tuple[List[Dict[str, Any]], int]] = None
+
         self._init_file_types()
+        self._setup_logging()
 
-    def set_query(self, query: str) -> None:
-        """
-        设置查询内容
-
-        Args:
-            query: 查询字符串
-
-        Raises:
-            TypeError: 如果query不是字符串类型
-        """
-        if not isinstance(query, str):
-            raise TypeError("Query must be a string")
-        self.query = query
+    def _setup_logging(self) -> None:
+        """设置日志"""
+        self.logger = logging.getLogger('ShortMemory')
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
     def _init_file_types(self):
         """初始化文件类型映射"""
@@ -55,29 +66,17 @@ class ShortMemory:
             'document': ['.pdf', '.doc', '.docx'],
             'code': ['.py', '.js', '.java', '.cpp', '.h'],
             'data': ['.json', '.csv', '.xml'],
-            'spreadsheet': ['.xlsx', '.xls'],
-            'presentation': ['.ppt', '.pptx'],
         }
         self.file_type_descriptions = {
-            'image': "An image file ({ext} format) provided as context for the query",
-            'text': "A text file ({ext} format) containing additional information related to the query",
-            'document': "A document ({ext} format) with content relevant to the query",
-            'code': "A source code file ({ext} format) potentially related to the query",
-            'data': "A data file ({ext} format) containing structured data pertinent to the query",
-            'spreadsheet': "A spreadsheet file ({ext} format) with tabular data relevant to the query",
-            'presentation': "A presentation file ({ext} format) with slides related to the query",
+            'image': "Image file ({ext} format)",
+            'text': "Text file ({ext} format)",
+            'document': "Document ({ext} format)",
+            'code': "Source code file ({ext} format)",
+            'data': "Data file ({ext} format)",
         }
 
-    def _get_default_description(self, file_name: str) -> str:
-        """
-        根据文件扩展名生成默认描述
-
-        Args:
-            file_name: 文件名
-
-        Returns:
-            文件描述字符串
-        """
+    def _get_file_description(self, file_name: str) -> str:
+        """根据文件扩展名生成描述"""
         _, ext = os.path.splitext(file_name)
         ext = ext.lower()
 
@@ -85,94 +84,87 @@ class ShortMemory:
             if ext in extensions:
                 return self.file_type_descriptions[file_type].format(ext=ext[1:])
 
-        return f"A file with {ext[1:]} extension, provided as context for the query"
+        return f"File with {ext[1:]} extension"
+
+    def set_query(self, query: str) -> None:
+        """设置查询内容"""
+        if not isinstance(query, str):
+            raise TypeError("Query must be a string")
+        self.query = query
 
     def add_file(self, file_name: Union[str, List[str]], description: Union[str, List[str], None] = None) -> None:
-        """
-        添加文件到记忆中
-
-        Args:
-            file_name: 文件名或文件名列表
-            description: 文件描述或描述列表，为None时自动生成
-
-        Raises:
-            ValueError: 如果文件名和描述数量不匹配
-        """
+        """添加文件"""
         if isinstance(file_name, str):
             file_name = [file_name]
 
         if description is None:
-            description = [self._get_default_description(fname) for fname in file_name]
+            description = [self._get_file_description(fname) for fname in file_name]
         elif isinstance(description, str):
             description = [description]
 
         if len(file_name) != len(description):
-            raise ValueError("The number of files and descriptions must match.")
+            raise ValueError("Number of files and descriptions must match")
 
         for fname, desc in zip(file_name, description):
+            # Ensure description is a safe string
+            if isinstance(desc, dict):
+                try:
+                    desc = json.dumps(desc, ensure_ascii=False)
+                except Exception:
+                    desc = str(desc)
             if len(self.files) >= self.max_files:
-                raise ValueError(f"Maximum number of files ({self.max_files}) exceeded")
-            self.files.append({
-                'file_name': fname,
-                'description': desc
-            })
+                raise ValueError(f"Maximum files ({self.max_files}) exceeded")
+            self.files.append({'file_name': fname, 'description': desc})
 
     def add_action(self, step_count: int, tool_name: str, sub_goal: str, command: str, result: Any) -> None:
-        """
-        添加动作记录到记忆中
-
-        Args:
-            step_count: 步骤计数
-            tool_name: 工具名称
-            sub_goal: 子目标
-            command: 执行命令
-            result: 执行结果
-
-        Raises:
-            ValueError: 当动作数量超过限制时
-        """
+        """添加动作记录"""
         if len(self.actions) >= self.max_actions:
-            raise ValueError(f"Maximum number of actions ({self.max_actions}) exceeded")
+            raise ValueError(f"Maximum actions ({self.max_actions}) exceeded")
 
-        action = {
-            'tool_name': tool_name,
-            'sub_goal': sub_goal,
-            'command': command,
-            'result': result,
+        self.actions[f"Action Step {step_count}"] = {
+            'tool_name': tool_name, 'sub_goal': sub_goal,
+            'command': command, 'result': result
         }
-        step_name = f"Action Step {step_count}"
-        self.actions[step_name] = action
 
-    def get_query(self) -> Optional[str]:
-        """
-        获取当前查询
+    def append_message(self, role: str, content: str, turn_id: Optional[str] = None) -> None:
+        """添加对话消息"""
+        if role not in ['user', 'assistant']:
+            raise ValueError("Role must be 'user' or 'assistant'")
 
-        Returns:
-            查询字符串或None
-        """
-        return self.query
+        message = {
+            'role': role, 'content': content, 'timestamp': time.time(),
+            'turn_id': turn_id or f"turn_{len(self.conversation_history)}",
+            'session_id': self.session_id, 'window_id': self.window_count
+        }
 
-    def get_files(self) -> List[Dict[str, str]]:
-        """
-        获取文件列表
+        self.conversation_history.append(message)
+        self.current_window.append(message)
 
-        Returns:
-            文件信息字典列表
-        """
-        return self.files
+        # 窗口滚动逻辑
+        if len(self.current_window) >= self.conversation_window_size:
+            self._pending_summary = (self.current_window.copy(), self.window_count)
+            self.current_window = []
+            self.window_count += 1
 
-    def get_actions(self) -> Dict[str, Dict[str, Any]]:
-        """
-        获取动作记录
+    def get_recent(self, n: int = 5) -> List[Dict[str, Any]]:
+        """获取最近的对话记录"""
+        return self.conversation_history[-n:] if self.conversation_history else []
 
-        Returns:
-            动作记录字典
-        """
-        return self.actions
+    def get_window_for_summary(self) -> Tuple[List[Dict[str, Any]], int]:
+        """获取待总结的窗口"""
+        if self._pending_summary:
+            window, window_id = self._pending_summary
+            self._pending_summary = None
+            return window, window_id
+        return [], -1
 
     def clear(self) -> None:
-        """清空所有记忆内容"""
+        """清空所有记忆"""
         self.query = None
         self.files = []
-        self.actions = {}
-
+        self.actions = []
+        self.conversation_history = []
+        self.current_window = []
+        self.window_count = 0
+        self.session_id = str(uuid.uuid4())
+        self._pending_summary = None

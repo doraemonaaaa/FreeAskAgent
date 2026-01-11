@@ -2,13 +2,15 @@ import argparse
 import time
 import json
 from typing import Optional, Sequence, Union, Dict, Any
+import re
 
-from ..agents.models_embodied.initializer import Initializer
-from ..agents.models_embodied.planner import Planner
-from ..agents.models_embodied.memory.short_memory import ShortMemory
-from ..agents.models_embodied.memory.long_memory import LongMemory
-from ..agents.models_embodied.executor import Executor
-from ..agents.utils.utils import make_json_serializable_truncated
+from .models_embodied.initializer import Initializer
+from .models_embodied.planner import Planner
+from .models_embodied.memory.short_memory import ShortMemory
+from .models_embodied.memory.long_memory import LongMemory
+from .models_embodied.memory.memory_manager import MemoryManager
+from .models_embodied.executor import Executor
+from .utils.utils import make_json_serializable_truncated
 
 # TODO: No Tool Use
 class SolverEmbodied:
@@ -44,32 +46,44 @@ class SolverEmbodied:
         self.enable_memory = enable_memory
         self.memory_config = memory_config or {}
 
-        # Initialize advanced memory system if enabled
-        self.short_memory = None
-        self.long_memory = None
+        # Initialize memory manager (unified memory system)
+        self.memory_manager = None
         if self.enable_memory:
             self._init_memory_system()
 
     def _init_memory_system(self):
-        """Initialize the advanced memory system (ShortMemory + LongMemory)"""
+        """Initialize the unified memory system with MemoryManager"""
         if self.verbose:
-            print("🧠 Initializing advanced memory systems...")
+            print("🧠 Initializing unified memory system...")
 
-        # Initialize ShortMemory for current session management
-        self.short_memory = ShortMemory()
+        # Initialize MemoryManager for coordinated memory operations
+        short_memory_config = {
+            'max_files': self.memory_config.get('max_files', 100),
+            'max_actions': self.memory_config.get('max_actions', 1000),
+            'conversation_window_size': self.memory_config.get('conversation_window_size', 3)
+        }
 
-        # Initialize LongMemory for persistent memory with A-MEM capabilities
-        retriever_config = self.memory_config.get('retriever_config', {'use_api_embedding': True})
-        self.long_memory = LongMemory(
-            use_amem=True,
-            retriever_config=retriever_config,
-            storage_dir=self.memory_config.get('storage_dir', "./memory_store"),
-            enable_persistence=self.memory_config.get('enable_persistence', True),
-            max_memories=self.memory_config.get('max_memories', 1000)
+        long_memory_config = {
+            'use_amem': True,
+            'retriever_config': self.memory_config.get('retriever_config', {'use_api_embedding': True}),
+            'gate_config': self.memory_config.get('gate_config', {}),
+            'storage_dir': self.memory_config.get('storage_dir', "./memory_store"),
+            'enable_persistence': self.memory_config.get('enable_persistence', True),
+            'max_memories': self.memory_config.get('max_memories', 1000)
+        }
+
+        self.memory_manager = MemoryManager(
+            short_memory_config=short_memory_config,
+            long_memory_config=long_memory_config,
+            conversation_window_size=self.memory_config.get('conversation_window_size', 3)
         )
 
+        # Keep backward compatibility
+        self.short_memory = self.memory_manager.get_short_memory()
+        self.long_memory = self.memory_manager.get_long_memory()
+
         if self.verbose:
-            print("✅ Advanced memory systems initialized and ready")
+            print("✅ Unified memory system initialized and ready")
 
     def populate_memory_for_task(self, task_description: str, task_type: str = "general_task"):
         """
@@ -84,15 +98,9 @@ class SolverEmbodied:
 
         # Add task information to short-term memory
         self.short_memory.set_query(task_description)
-
-        # Add contextual memory to long-term memory for better retrieval
-        memory_content = f"Task: {task_description}"
-        if task_type == "navigation_task":
-            memory_content += ". Analyzing environment and planning navigation steps."
-        elif task_type == "analysis_task":
-            memory_content += ". Performing detailed analysis and reasoning."
-
-        self.long_memory.add_memory(memory_content, task_type)
+    # 不要每轮把 task 写入 long_memory，避免污染；
+    # long_memory 只存窗口总结（conversation_summary）
+        return    
 
     def retrieve_relevant_memories(self, query: str, k: int = 5) -> list:
         """
@@ -105,10 +113,10 @@ class SolverEmbodied:
         Returns:
             List of relevant memory objects
         """
-        if not self.enable_memory or not self.long_memory:
+        if not self.enable_memory or not self.memory_manager:
             return []
 
-        return self.long_memory.retrieve_memories(query, k)
+        return self.memory_manager.retrieve_relevant_memories(query, k)
 
     def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None, task_type: str = "general_task"):
         """
@@ -123,9 +131,11 @@ class SolverEmbodied:
         self.executor.set_query_cache_dir(self.root_cache_dir)
 
         # Initialize json_data with basic problem information
+        relevant_memories = ""
         json_data = {
             "query": question,
-            "images": image_paths
+            "images": image_paths,
+            "relevant_memories": relevant_memories
         }
         if self.verbose:
             print(f"\n==> 🔍 Received Query: {question}")
@@ -142,12 +152,11 @@ class SolverEmbodied:
 
             # Retrieve relevant memories for context enhancement
             relevant_memories = self.retrieve_relevant_memories(question, k=3)
-            print(f"DEBUG: Retrieved {len(relevant_memories)} memories at solver level")
-            if relevant_memories:
-                for i, mem in enumerate(relevant_memories[:2]):
-                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+
             if relevant_memories and self.verbose:
                 print(f"📚 Retrieved {len(relevant_memories)} relevant memories for context")
+                for i, mem in enumerate(relevant_memories[:2]):
+                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
             json_data["relevant_memories"] = relevant_memories
 
         # Generate base response if requested
@@ -161,6 +170,40 @@ class SolverEmbodied:
         if set(self.output_types) == {'base'}:
             return json_data
     
+        def _format_memory_block(memories: list) -> str:
+            if not memories:
+                return ""
+            lines = []
+            for mem in memories[:2]:
+                text = mem.get("original_content") or mem.get("content") or ""
+                if not isinstance(text, str):
+                    text = str(text)
+                # Strip analyzer metadata and keep a short preview
+                text = re.split(r"\n?KEYWORDS:|\n?CONTEXT:|\n?TAGS:", text, maxsplit=1)[0]
+                text = re.sub(r"关键词:.*", "", text)
+                text = re.sub(r"主要内容:.*", "", text)
+                text = re.sub(r"对话记录:.*", "", text)
+                text = text.strip()
+                if not text:
+                    continue
+                if len(text) > 200:
+                    text = text[:200].rstrip() + "..."
+                lines.append(f"- {text}")
+            return "\n".join(lines)
+
+        def _inject_memory_block(text: str, memories: list) -> str:
+            if not text or "<<Mmeory>>" in text:
+                return text
+            memory_body = _format_memory_block(memories)
+            if not memory_body:
+                return text
+            memory_block = f"<<Mmeory>>:\n{memory_body}\n"
+            if "<<Decision>>:" in text:
+                return text.replace("<<Decision>>:", f"{memory_block}\n<<Decision>>:", 1)
+            if "<<Decision>>" in text:
+                return text.replace("<<Decision>>", f"{memory_block}\n<<Decision>>", 1)
+            return text.rstrip() + "\n\n" + memory_block
+
         # Continue with query analysis and tool execution if final or direct responses are needed
         if {'final', 'direct'} & set(self.output_types):
             if self.verbose:
@@ -168,11 +211,18 @@ class SolverEmbodied:
 
             # [1] Analyze query
             query_start_time = time.time()
+
+            # Record user message to memory if memory system is enabled
+            if self.enable_memory and self.memory_manager:
+                self.memory_manager.add_message('user', question)
+
             relevant_memories = json_data.get("relevant_memories", [])
-            print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
+            
             if relevant_memories:
-                for i, mem in enumerate(relevant_memories[:2]):
-                    print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
+                if self.verbose:
+                    print(f"DEBUG: Found {len(relevant_memories)} relevant memories for query analysis")
+                    for i, mem in enumerate(relevant_memories[:2]):
+                        print(f"DEBUG: Memory {i}: {mem.get('original_content', mem.get('content', ''))[:50]}...")
             query_analysis = self.planner.analyze_query(question, image_paths, relevant_memories)
             json_data["query_analysis"] = query_analysis
             if self.verbose:
@@ -182,19 +232,89 @@ class SolverEmbodied:
 
             # Generate final output if requested
             if 'final' in self.output_types:
-                final_output = self.planner.generate_final_output(question, image_paths, self.memory)
+                # Attempt original prompt, then retry with progressively simpler fallbacks if blocked by content filters
+                fallback_prompts = [
+                    question,
+                    "Description: Brief one-line neutral description of the image scene."
+                ]
+                final_output = None
+                last_exception = None
+                for idx, p in enumerate(fallback_prompts):
+                    try:
+                        final_output = self.planner.generate_direct_output(p, image_paths, self.memory, relevant_memories)
+                        break
+                    except Exception as _e:
+                        last_exception = _e
+                        if not ("content_filter" in str(_e) or "filtered" in str(_e).lower()):
+                            # If it's not a content filter error, re-raise immediately
+                            raise
+                        if self.verbose:
+                            print(f"⚠️ Prompt attempt {idx+1} was filtered; trying next fallback...")
+                if final_output is None:
+                    # All fallbacks failed due to content filtering; surface a clear message
+                    raise last_exception
+                final_output = _inject_memory_block(final_output, relevant_memories)
                 json_data["final_output"] = final_output
                 print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
                 relevant_memories = json_data.get("relevant_memories", [])
-                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory, relevant_memories)
+                # Retry sequence for direct output similar to final_output
+                fallback_prompts = [
+                    question,
+                    "Description: Brief one-line neutral description of the image scene."
+                ]
+                direct_output = None
+                last_exception = None
+                for idx, p in enumerate(fallback_prompts):
+                    try:
+                        direct_output = self.planner.generate_direct_output(p, image_paths, self.memory, relevant_memories)
+                        break
+                    except Exception as _e:
+                        last_exception = _e
+                        if not ("content_filter" in str(_e) or "filtered" in str(_e).lower()):
+                            raise
+                        if self.verbose:
+                            print(f"⚠️ Direct prompt attempt {idx+1} was filtered; trying next fallback...")
+                if direct_output is None:
+                    raise last_exception
+                direct_output = _inject_memory_block(direct_output, relevant_memories)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
-            print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
-            print(f"\n==> ✅ Query Solved!")
+                # Record assistant message to memory if memory system is enabled
+                if self.enable_memory and self.memory_manager:
+                    self.memory_manager.add_message('assistant', direct_output)
+
+                # Auto-extract a concise image/environment description and add to long-term memory
+                try:
+                    def _extract_description(text: str) -> str:
+                        if not text:
+                            return ""
+                        # Try to capture a labeled "Description" block
+                        m = re.search(r"Description[:：]\\s*(.+?)(?:\\n\\n|$)", text, flags=re.S)
+                        if m:
+                            return m.group(1).strip()
+                        # Fallback to first line or first 200 chars
+                        first_line = text.strip().splitlines()[0] if text.strip().splitlines() else text.strip()
+                        return first_line.strip()[:400]
+
+                    description_text = _extract_description(direct_output or json_data.get("final_output") or "")
+                    if description_text and self.enable_memory and self.memory_manager and getattr(self.memory_manager, 'long_memory', None):
+                        added = self.memory_manager.long_memory.add_memory(description_text, memory_type="image_description", metadata={"source":"auto_extracted"})
+                        if self.verbose:
+                            print(f"🧠 Auto memory save (image_description): {added} - {description_text[:120]}...")
+                except Exception as _e:
+                    if self.verbose:
+                        print(f"Warning: failed to auto-save image description to memory: {_e}")
+            if self.verbose:
+                print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
+                print("\n==> Query Solved!")
+
+        # Save memory state if memory system is enabled
+        if self.enable_memory and self.memory_manager:
+            self.memory_manager.save_state()
 
         return json_data
 
@@ -214,6 +334,10 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enable_multimodal: Optional[bool] = None,
                      enable_memory: bool = False,
                      memory_config: Optional[Dict[str, Any]] = None,
+                     planner: Optional[Planner] = None,
+                     executor: Optional[Executor] = None,
+                     memory: Optional[ShortMemory] = None,
+                     initializer: Optional[Initializer] = None,
                      ):
 
     # Parse model_engine configuration
@@ -223,39 +347,43 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     planner_fixed_engine = llm_engine_name if model_engine[1] == "trainable" else model_engine[1]
     executor_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
 
-    # Instantiate Initializer
-    initializer = Initializer(
-        enabled_tools=enabled_tools,
-        tool_engine=tool_engine,
-        model_string=llm_engine_name,
-        verbose=verbose,
-        vllm_config_path=vllm_config_path,
-    )
+    # Instantiate Initializer (unless provided)
+    if initializer is None:
+        initializer = Initializer(
+            enabled_tools=enabled_tools,
+            tool_engine=tool_engine,
+            model_string=llm_engine_name,
+            verbose=verbose,
+            vllm_config_path=vllm_config_path,
+        )
 
-    # Instantiate Planner
-    planner = Planner(
-        llm_engine_name=planner_main_engine,
-        llm_engine_fixed_name=planner_fixed_engine,
-        toolbox_metadata=initializer.toolbox_metadata,
-        available_tools=initializer.available_tools,
-        verbose=verbose,
-        base_url=base_url,
-        temperature=temperature,
-        is_multimodal=enable_multimodal
-    )
+    # Instantiate Planner (unless provided)
+    if planner is None:
+        planner = Planner(
+            llm_engine_name=planner_main_engine,
+            llm_engine_fixed_name=planner_fixed_engine,
+            toolbox_metadata=initializer.toolbox_metadata,
+            available_tools=initializer.available_tools,
+            verbose=verbose,
+            base_url=base_url,
+            temperature=temperature,
+            is_multimodal=enable_multimodal
+        )
 
-    # Instantiate Memory
-    memory = ShortMemory(max_files=50, max_actions=500)
+    # Instantiate Memory (unless provided)
+    if memory is None:
+        memory = ShortMemory(max_files=50, max_actions=500)
 
-    # Instantiate Executor with tool instances cache
-    executor = Executor(
-        llm_engine_name=executor_engine,
-        root_cache_dir=root_cache_dir,
-        verbose=verbose,
-        base_url=base_url if executor_engine == llm_engine_name else None,  # Only use base_url for trainable model
-        temperature=temperature,
-        tool_instances_cache=initializer.tool_instances_cache  # Pass the cached tool instances
-    )
+    # Instantiate Executor with tool instances cache (unless provided)
+    if executor is None:
+        executor = Executor(
+            llm_engine_name=executor_engine,
+            root_cache_dir=root_cache_dir,
+            verbose=verbose,
+            base_url=base_url if executor_engine == llm_engine_name else None,  # Only use base_url for trainable model
+            temperature=temperature,
+            tool_instances_cache=initializer.tool_instances_cache  # Pass the cached tool instances
+        )
 
     # Instantiate Solver
     solver = SolverEmbodied(

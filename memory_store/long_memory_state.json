@@ -1,0 +1,82 @@
+{
+  "long_term_memories": [
+    "关键词: store, street, sidewalk, trees, cars | 主要内容: The content describes an urban street scene with a focus on the environment, including elements like trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' The intended audience is likely someone seeking visual or descriptive information about cityscapes. | 对话记录: [12:10:41] USER: \"\nGo to the store, called micheal's store.\n[12:10:53] ASSISTANT: The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.\n\nBased on the image, there is no specific indication of a store named \"Michael's Store.\" The scene depicts a typical city street, and further information or directions would be needed to locate the store.\nKEYWORDS: urban street environment trees cars buildings\nCONTEXT: The content provides a visual description of an urban street scene, highlighting environmental elements such as trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' It is intended for an audience interested in cityscapes and urban environments.\nTAGS: urban environment visual description cityscape",
+    "The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.\nKEYWORDS: street scene sidewalk trees parked cars building urban\nCONTEXT: The image depicts an urban street scene characterized by a pedestrian-friendly sidewalk, trees, parked cars, and a tall building, aimed at illustrating urban design and environment aesthetics.\nTAGS: urban design environment architecture photography landscape"
+  ],
+  "memory_metadata": [
+    {
+      "content": "关键词: store, street, sidewalk, trees, cars | 主要内容: The content describes an urban street scene with a focus on the environment, including elements like trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' The intended audience is likely someone seeking visual or descriptive information about cityscapes. | 对话记录: [12:10:41] USER: \"\nGo to the store, called micheal's store.\n[12:10:53] ASSISTANT: The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.\n\nBased on the image, there is no specific indication of a store named \"Michael's Store.\" The scene depicts a typical city street, and further information or directions would be needed to locate the store.\nKEYWORDS: urban street environment trees cars buildings\nCONTEXT: The content provides a visual description of an urban street scene, highlighting environmental elements such as trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' It is intended for an audience interested in cityscapes and urban environments.\nTAGS: urban environment visual description cityscape",
+      "original_content": "关键词: store, street, sidewalk, trees, cars | 主要内容: The content describes an urban street scene with a focus on the environment, including elements like trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' The intended audience is likely someone seeking visual or descriptive information about cityscapes. | 对话记录: [12:10:41] USER: \"\nGo to the store, called micheal's store.\n[12:10:53] ASSISTANT: The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.\n\nBased on the image, there is no specific indication of a store named \"Michael's Store.\" The scene depicts a typical city street, and further information or directions would be needed to locate the store.",
+      "analysis": {
+        "keywords": [
+          "urban street",
+          "environment",
+          "trees",
+          "cars",
+          "buildings"
+        ],
+        "context": "The content provides a visual description of an urban street scene, highlighting environmental elements such as trees, cars, and buildings, but lacks specific details about a store named 'Michael's Store.' It is intended for an audience interested in cityscapes and urban environments.",
+        "tags": [
+          "urban environment",
+          "visual description",
+          "cityscape"
+        ]
+      },
+      "type": "conversation_summary",
+      "timestamp": 1768104660.2362816,
+      "added_at": "2026-01-11T12:11:00.236282",
+      "window_id": 0,
+      "session_id": "d97f168a-c4d4-4550-bd05-bd1b1f2f43ee",
+      "turn_range": "turn_0 - turn_1",
+      "message_count": 2,
+      "created_at": "2026-01-11T12:10:58.033779"
+    },
+    {
+      "content": "The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.\nKEYWORDS: street scene sidewalk trees parked cars building urban\nCONTEXT: The image depicts an urban street scene characterized by a pedestrian-friendly sidewalk, trees, parked cars, and a tall building, aimed at illustrating urban design and environment aesthetics.\nTAGS: urban design environment architecture photography landscape",
+      "original_content": "The image shows a street scene with a sidewalk lined by trees and a row of parked cars on the right. There is a tall building in the background, and the area appears to be urban with clear skies. The sidewalk is wide and well-maintained, suggesting a pedestrian-friendly environment.",
+      "analysis": {
+        "keywords": [
+          "street scene",
+          "sidewalk",
+          "trees",
+          "parked cars",
+          "building",
+          "urban"
+        ],
+        "context": "The image depicts an urban street scene characterized by a pedestrian-friendly sidewalk, trees, parked cars, and a tall building, aimed at illustrating urban design and environment aesthetics.",
+        "tags": [
+          "urban design",
+          "environment",
+          "architecture",
+          "photography",
+          "landscape"
+        ]
+      },
+      "type": "image_description",
+      "timestamp": 1768104661.8939185,
+      "added_at": "2026-01-11T12:11:01.893920",
+      "source": "auto_extracted"
+    }
+  ],
+  "stats": {
+    "total_memories": 2,
+    "retrieval_count": 0,
+    "avg_retrieval_time": 0.0,
+    "amem_enabled": true,
+    "performance_metrics": {
+      "retrieval_times": [],
+      "error_count": 0,
+      "success_rate": 1.0
+    },
+    "memory_types": {
+      "conversation_summary": 1,
+      "image_description": 1
+    },
+    "retrieval_patterns": {}
+  },
+  "dedup_hashes": [
+    "2c2bf9466ae1e93f3b29e9052e952742",
+    "d1da00a9c7d854f009d16d817821ee99"
+  ],
+  "version": "1.0"
+}
