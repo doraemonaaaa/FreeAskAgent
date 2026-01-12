@@ -1418,9 +1418,6 @@ class Memory:
     def get_actions(self) -> Dict[str, Dict[str, Any]]:
         return self.actions
 
-    # -------------------------
-    # A-Mem convenience methods
-    # -------------------------
     def add_note(self, content: str, **kwargs) -> Optional[str]:
         if self.amem is None:
             return None
