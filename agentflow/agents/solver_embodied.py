@@ -79,12 +79,12 @@ class SolverEmbodied:
 
             # [1] Analyze query
             query_start_time = time.time()
-            query_analysis = self.planner.analyze_query(question, image_paths)
-            json_data["query_analysis"] = query_analysis
-            if self.verbose:
-                print(f"\n==> 🔍 Step 0: Query Analysis\n")
-                print(f"{query_analysis}")
-                print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
+            # query_analysis = self.planner.analyze_query(question, image_paths)
+            # json_data["query_analysis"] = query_analysis
+            # if self.verbose:
+            #     print(f"\n==> 🔍 Step 0: Query Analysis\n")
+            #     print(f"{query_analysis}")
+            #     print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
 
             # Generate final output if requested
             if 'final' in self.output_types:

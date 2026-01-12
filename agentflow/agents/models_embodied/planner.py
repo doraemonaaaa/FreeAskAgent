@@ -138,19 +138,20 @@ class Planner:
         image_info = get_image_info(image)
         if self.is_multimodal:
             prompt_generate_final_output = f"""
-Context:
-Query: {question}
-Image: {image_info}
+# Context:
+## Query: {question}
+## Image: {image_info}
 
-Actions Taken:
+## Actions Taken:
 {memory.get_actions()}
 
-VLN Task Principle Prompt:
+## VLN Task Principle Prompt:
 {vln_prompt()}
 
-Tools:
+## Tools:
 Available tools: {self.available_tools}
 Metadata for the tools: {self.toolbox_metadata}
+# End of Context
 """
 
         input_data = [prompt_generate_final_output]
@@ -176,3 +177,4 @@ Metadata for the tools: {self.toolbox_metadata}
         # final_output = self.llm_engine_mm(input_data)
 
         return final_output
+    

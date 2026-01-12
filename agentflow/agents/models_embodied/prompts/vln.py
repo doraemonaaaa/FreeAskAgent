@@ -13,10 +13,10 @@ VLN_TASK_PROMPT = """
 ---
 
 ## Action Space
-- <Move(x, y, yaw)>   # x forward(+)/backward(-), y left(+)/right(-), yaw degrees (+ left, - right)
-- <Ask(text)>         # Only if a human is visible and within 3 meters, The text should ask for social or goal-related information (e.g., target name, intent, directions).
-- <Wait(t)>
-- <Stop()>
+- <Move(x, y, yaw)> ### Definition: x forward(+)/backward(-), y left(+)/right(-), yaw degrees (+ left, - right)
+- <Ask(text)> ### Definition: Only if a human is visible and within 2 meters, The text should ask for social or goal-related information (e.g., target name, intent, directions).
+- <Wait(t)> ### Definition: t is the time we wait           
+- <Stop()> ### Stop will end the task
 
 ---
 
@@ -68,6 +68,8 @@ State:
 
 Action:
 One of Action Space.
+
+# End of VLN Task
 """
 
 
