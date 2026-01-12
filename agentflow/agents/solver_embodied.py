@@ -3,11 +3,11 @@ import time
 import json
 from typing import Optional, Sequence, Union
 
-from ..agentflow.models_embodied.initializer import Initializer
-from ..agentflow.models_embodied.planner import Planner
-from ..agentflow.models_embodied.memory import Memory
-from ..agentflow.models_embodied.executor import Executor
-from ..agentflow.utils.utils import make_json_serializable_truncated
+from ..agents.models_embodied.initializer import Initializer
+from ..agents.models_embodied.planner import Planner
+from ..agents.models_embodied.memory.memory import Memory
+from ..agents.models_embodied.executor import Executor
+from ..agents.utils.utils import make_json_serializable_truncated
 
 # TODO: No Tool Use
 class SolverEmbodied:
