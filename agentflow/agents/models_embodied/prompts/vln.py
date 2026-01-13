@@ -29,12 +29,26 @@ VLN_TASK_PROMPT = """
 ---
 
 ## Decision Rules
-1. If target is visible → Navigating.
-2. If target not visible → Exploration.
-3. In Exploration:
-   - First rotate to scan.
-   - Move only if scanning is insufficient.
-4. Ask only when a human is close for direction of target.
+1. If final target is visible → Navigating.
+2. If current subgoal location is known → Navigating.
+3. If neither target nor subgoal is known → Exploration.
+4. In Exploration:
+   a. Rotate first (scan).
+   b. Move only if scanning is insufficient.
+5. Ask only when a human is visible and the goal or subgoal is unclear.
+
+---
+
+## Internal Task Decomposition (Hierarchy)
+
+### 1. High-level Goal
+Final target (object, place, or person).
+
+### 2. Subgoals
+Ordered spatial or informational steps (e.g., "Align with blue path", "Pass the red door", "Reach the hallway").
+
+### 3. Progress Check
+Evaluate if the current Subgoal is reached via the Ego Arrow's proximity to the intended map area.
 
 ---
 
@@ -43,6 +57,7 @@ VLN_TASK_PROMPT = """
 Robot Belief:
 - Do I know where the target is?
 - Is a human visible?
+- Do I know where the current subgoal is?
 
 User Belief:
 - What does the user think about the target location?
@@ -59,9 +74,13 @@ Description: One sentence of what I see and what the user wants.
 Belief:
 - Target: visible / not visible
 - Human: visible / not visible
+- Subgoal: known / unknown
+
+Current Subgoal:
+- [Short phrase: e.g., "Turn to align with target arrow", "Navigate through the blue corridor"]
 
 Intention:
-- What I plan to do next.
+- [Next step reasoning]
 
 State:
 <Navigating> or <Exploration: Self> or <Exploration: Ask> or <Stop>
