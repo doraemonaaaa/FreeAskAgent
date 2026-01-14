@@ -2,7 +2,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # class Attributes(BaseModel):
 #     model_config = ConfigDict(extra="forbid")
 
