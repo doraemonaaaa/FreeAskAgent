@@ -13,14 +13,11 @@ VLN_TASK_PROMPT = """
 ---
 
 ## Action Space
-### <Move(x, y, yaw)>
-- **Description**: Physical displacement and rotation.
-- **Parameters**:
-  - `x`: [Float] Forward(+) or Backward(-) in meters.
-  - `y`: [Float] Left(+) or Right(-) in meters.
-  - `yaw`: [Float] Rotation in degrees (Counter-clockwise/Left is +, Clockwise/Right is -).
-- **Example**: `<Move(1.5, 0, -45)>` (Move forward 1.5m and turn right 45 degrees).
-- **Attention**: For diagonal or non-forward movement, first rotate toward the desired direction, then move along the new forward/left axes.
+
+### <Forward(n)>  # Move forward n meter
+### <TurnLeft(n)>  # Turn left n degree
+### <TurnRight(n)>  # Turn Right n degree
+### <TurnAround()>  # Turn around for 180 degree
 
 ### <Ask(text)>
 - **Pre-condition**: MUST ONLY be used if a Human is visible AND distance < 2.0 meters.
@@ -104,7 +101,8 @@ Subgoal:
   <Current index>. <Current subgoal>
 
 Intention:
-- [Next step reasoning]
+- [Next step reasoning]: Brief explanation of the planned immediate action, including why it's chosen based on current belief, state, and goal progress.
+- [Area of interest]: Specific description of the focused area, object, landmark, or direction (e.g., "the blue vase on the table ahead", "left corridor at 45 degrees", or "scanning 360 degrees for humans"). If no specific area, state "general environment scan".
 
 State:
 <Navigating> or <Exploration: Self> or <Exploration: Ask> or <Stop>
@@ -118,3 +116,16 @@ One of the Action Space.
 
 if __name__ == "__main__":
   print(vln_prompt())
+
+
+#   ### <Move(x, y, yaw)>
+# - **Description**: 
+#   - This action is executed in two sequential stages:
+#   - 1. First rotate the robot by yaw degrees.
+#   - 2. Then move by (x, y) in the robot’s new local coordinate frame after rotation.
+# - **Parameters**:
+#   - `x`: [Float] Forward(+) or Backward(-) in meters.
+#   - `y`: [Float] Left(+) or Right(-) in meters.
+#   - `yaw`: [Float] Rotation in degrees (Counter-clockwise/Left is +, Clockwise/Right is -).
+# - **Example**: `<Move(1.5, 0, -45)>` (Turn right 45 degrees, then move forward 1.5m).
+# - **Attention**: For diagonal or non-forward movement, first rotate toward the desired direction, then move along the new forward/left axes.

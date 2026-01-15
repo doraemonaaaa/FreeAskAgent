@@ -39,7 +39,7 @@ class SolverEmbodied:
         assert all(output_type in ["base", "final", "direct"] for output_type in self.output_types), "Invalid output type. Supported types are 'base', 'final', 'direct'."
         self.verbose = verbose
         
-    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None):
+    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None, interaction_memory: Optional[str] = None):
         """
         Solve a single problem from the benchmark dataset.
         
@@ -101,6 +101,7 @@ class SolverEmbodied:
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
             method, params = self.parse_command(json_data["direct_output"] )
+            
             if not method:
                 self.get_logger().error("Failed to parse command, skipping action.")
                 command = None  # 或抛异常/默认动作
@@ -109,7 +110,10 @@ class SolverEmbodied:
                 command = f"<{method}({params})>"
 
             if command:
-                self.memory.add_embodied_action(command)  # 自动累计
+                if interaction_memory is not None:
+                    self.memory.add_embodied_action(output_text=json_data["direct_output"], command=command, interaction_memory=interaction_memory, execution_time=round(time.time() - query_start_time, 2))
+                else:
+                    self.memory.add_embodied_action(output_text=json_data["direct_output"], command=command, execution_time=round(time.time() - query_start_time, 2))
             memory_data = self.memory.get_actions()  # 现在返回 {"total_steps": N, "actions": {...}}
             json_data.update({
                 "memory": memory_data,  # 包含 total_steps 和 actions，对齐了
@@ -155,7 +159,7 @@ class SolverEmbodied:
         method_params = method_params
 
         return method, method_params
-
+    
 def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enabled_tools : list[str] = ["all"],
                      tool_engine: list[str] = ["Default"],

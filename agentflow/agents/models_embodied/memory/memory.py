@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Union, Optional
 import os
 from pathlib import Path
+import re
 
 class Memory:
     _global_instance: Optional['Memory'] = None  # 单例实例（进程内全局共享）
@@ -77,14 +78,35 @@ class Memory:
                 'description': desc
             })
 
-    def add_embodied_action(self, prev_command: str) -> None:
-        # 使用 len(self.actions) 计算步数（可靠、安全）
+    def add_embodied_action(
+        self, 
+        output_text: str, 
+        command: Optional[str] = None,
+        interaction_memory: Optional[str] = None,
+        execution_time: Optional[float] = None
+    ) -> None:
+        """
+        添加一个 embodied action 到内存中。
+        - 自动解析 output_text 中的 Belief, Intention, State 和 Subgoal。
+        - 可选地存储 command 和 execution_time。
+        - 使用 len(self.actions) 计算步数（可靠、安全）。
+        """
         step_count = len(self.actions) + 1
-        
-        action = {
-            'previous_command': prev_command
-        }
         step_name = f"Action Step {step_count}"
+
+        # 解析 VLN 输出
+        parsed_data = self.parse_vln_output(output_text)
+
+        action = {
+            'previous_command': command if command else None,
+            'interaction_memory': interaction_memory if interaction_memory else None,
+            'belief': parsed_data.get('belief'),
+            'subgoal': parsed_data.get('subgoal'),
+            'intention': parsed_data.get('intention'),
+            'state': parsed_data.get('state'),
+            'execution_time': execution_time
+        }
+
         self.actions[step_name] = action
 
     def get_total_steps(self) -> int:
@@ -116,3 +138,89 @@ class Memory:
             "memory_window_size": self.max_memory_length,
             "actions": recent_actions 
         }
+
+    # 以下是融合的解析函数（从之前的 parse_vln_output 移植过来）
+    def parse_vln_output(self, output_text: str) -> Dict[str, Any]:
+        """
+        Parse the VLN output text to extract Belief, Subgoal, Intention, and State sections.
+        Returns a dictionary with parsed data for each section.
+        """
+        log_path = Path("tmp/llm_raw_text.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"Parsing VLN output: {output_text}\n" + "-"*80 + "\n")
+
+        def extract_section(section_name: str, pattern: str):
+            match = re.search(pattern, output_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                section_text = match.group(1).strip()
+                print(f"Extracted {section_name} Text: {section_text}")
+                return section_text
+            else:
+                print(f"Label '{section_name}:' not found in output.")
+                return None
+
+        parsed_data = {}
+
+        # Parse Belief
+        belief_text = extract_section(
+            "Belief",
+            r"(?:\*\*Belief\*\*|Belief)\s*:\s*(.*?)(\n(?:Intention|Subgoal|State|Action|Description|$))"
+        )
+        if belief_text:
+            belief_dict = {}
+            lines = belief_text.splitlines()
+            for line in lines:
+                if line.strip().startswith('-'):
+                    key_value = line.strip()[1:].strip().split(':', 1)
+                    if len(key_value) == 2:
+                        key = key_value[0].strip()
+                        value = key_value[1].strip()
+                        belief_dict[key] = value
+            parsed_data['belief'] = belief_dict
+
+        # Parse Subgoal
+        subgoal_text = extract_section(
+            "Subgoal",
+            r"(?:\*\*Subgoal\*\*|Subgoal)\s*:\s*(.*?)(\n(?:Intention|State|Action|Belief|Description|$))"
+        )
+        if subgoal_text:
+            planning_match = re.search(r"\[Subgoal Planning\]:\s*(.*?)(?=\[Current Subgoal\]|$)", subgoal_text, re.DOTALL)
+            current_match = re.search(r"\[Current Subgoal\]:\s*(.*)", subgoal_text, re.DOTALL)
+            subgoals = {
+                "planning": [],
+                "current": None
+            }
+            if planning_match:
+                planning_text = planning_match.group(1).strip()
+                planning_lines = [line.strip() for line in planning_text.splitlines() if line.strip().startswith(tuple(str(i) + '.' for i in range(1, 100)))]
+                subgoals["planning"] = [re.sub(r"^\d+\.\s*", "", line) for line in planning_lines]
+            if current_match:
+                current_text = current_match.group(1).strip()
+                subgoals["current"] = re.sub(r"^\d+\.\s*", "", current_text)
+            parsed_data['subgoal'] = subgoals
+
+        # Parse Intention
+        intention_text = extract_section(
+            "Intention",
+            r"(?:\*\*Intention\*\*|Intention)\s*:\s*(.*?)(\n(?:State|Action|Subgoal|Belief|Description|$))"
+        )
+        if intention_text:
+            reasoning_match = re.search(r"\[Next step reasoning\]:\s*(.*?)(?=\[Area of interest\]|$)", intention_text, re.DOTALL)
+            area_match = re.search(r"\[Area of interest\]:\s*(.*)", intention_text, re.DOTALL)
+            intention = {
+                "reasoning": reasoning_match.group(1).strip() if reasoning_match else None,
+                "area": area_match.group(1).strip() if area_match else None
+            }
+            parsed_data['intention'] = intention
+
+        # Parse State
+        state_text = extract_section(
+            "State",
+            r"(?:\*\*State\*\*|State)\s*:\s*(.*?)(\n(?:Action|Intention|Subgoal|Belief|Description|$))"
+        )
+        if state_text:
+            state_match = re.search(r"<(.*?)>", state_text, re.DOTALL)
+            if state_match:
+                parsed_data['state'] = state_match.group(1).strip()
+
+        return parsed_data
