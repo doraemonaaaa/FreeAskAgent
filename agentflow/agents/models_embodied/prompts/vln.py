@@ -13,10 +13,28 @@ VLN_TASK_PROMPT = """
 ---
 
 ## Action Space
-- <Move(x, y, yaw)> ### Definition: x forward(+)/backward(-), y left(+)/right(-), yaw degrees (+ left, - right)
-- <Ask(text)> ### Definition: Only if a human is visible and within 2 meters, The text should ask for social or goal-related information (e.g., target name, intent, directions).
-- <Wait(t)> ### Definition: t is the time we wait           
-- <Stop()> ### Stop will end the task
+### <Move(x, y, yaw)>
+- **Description**: Physical displacement and rotation.
+- **Parameters**:
+  - `x`: [Float] Forward(+) or Backward(-) in meters.
+  - `y`: [Float] Left(+) or Right(-) in meters.
+  - `yaw`: [Float] Rotation in degrees (Counter-clockwise/Left is +, Clockwise/Right is -).
+- **Example**: `<Move(1.5, 0, -45)>` (Move forward 1.5m and turn right 45 degrees).
+- **Attention**: For diagonal or non-forward movement, first rotate toward the desired direction, then move along the new forward/left axes.
+
+### <Ask(text)>
+- **Pre-condition**: MUST ONLY be used if a Human is visible AND distance < 2.0 meters.
+- **Usage**: Request social or goal-related info (e.g., "Where is the kitchen?", "Are you the person I'm looking for?").
+- **Example**: `<Ask("Excuse me, could you tell me where the apple is?")>`
+
+### <Wait(t)>
+- **Description**: Pause execution for a specific duration.
+- **Parameters**: `t` [Float/Int] in seconds.
+- **Example**: `<Wait(5)>`
+
+### <Stop()>
+- **Description**: Final action to terminate the task. 
+- **Usage**: Execute ONLY when the goal is fully achieved.
 
 ---
 
@@ -35,7 +53,7 @@ VLN_TASK_PROMPT = """
 4. In Exploration:
    a. Rotate first (scan).
    b. Move only if scanning is insufficient.
-5. Ask only when a human is visible and the goal or subgoal is unclear.
+5. Ask human only if visible AND goal/subgoal unclear.
 
 ---
 
@@ -45,10 +63,10 @@ VLN_TASK_PROMPT = """
 Final target (object, place, or person).
 
 ### 2. Subgoals
-Ordered spatial or informational steps (e.g., "Align with blue path", "Pass the red door", "Reach the hallway").
+Ordered spatial or informational steps (e.g., "Pass the red door", "Reach the hallway").
 
 ### 3. Progress Check
-Evaluate if the current Subgoal is reached via the Ego Arrow's proximity to the intended map area.
+Determine if current subgoal is reached via ego arrow proximity and command history.
 
 ---
 
@@ -76,8 +94,14 @@ Belief:
 - Human: visible / not visible
 - Subgoal: known / unknown
 
-Current Subgoal:
-- [Short phrase: e.g., "Turn to align with target arrow", "Navigate through the blue corridor"]
+Subgoal:
+- [Subgoal Planning]:
+  1. <Subgoal 1>
+  2. <Subgoal 2>
+  3. <Subgoal 3>
+  ...
+- [Current Subgoal]:
+  <Current index>. <Current subgoal>
 
 Intention:
 - [Next step reasoning]
@@ -86,7 +110,7 @@ State:
 <Navigating> or <Exploration: Self> or <Exploration: Ask> or <Stop>
 
 Action:
-One of Action Space.
+One of the Action Space.
 
 # End of VLN Task
 """

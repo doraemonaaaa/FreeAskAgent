@@ -2,6 +2,8 @@ import argparse
 import time
 import json
 from typing import Optional, Sequence, Union
+from pathlib import Path
+import re
 
 from ..agents.models_embodied.initializer import Initializer
 from ..agents.models_embodied.planner import Planner
@@ -98,10 +100,61 @@ class SolverEmbodied:
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
+            method, params = self.parse_command(json_data["direct_output"] )
+            if not method:
+                self.get_logger().error("Failed to parse command, skipping action.")
+                command = None  # 或抛异常/默认动作
+            else:
+                # 复原 command 字符串
+                command = f"<{method}({params})>"
+
+            if command:
+                self.memory.add_embodied_action(command)  # 自动累计
+            memory_data = self.memory.get_actions()  # 现在返回 {"total_steps": N, "actions": {...}}
+            json_data.update({
+                "memory": memory_data,  # 包含 total_steps 和 actions，对齐了
+                "execution_time": round(time.time() - query_start_time, 2),
+            })
+            # print("Memory: " + json.dumps(memory_data, ensure_ascii=False, indent=2))
+
             print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
             print(f"\n==> ✅ Query Solved!")
 
         return json_data
+    
+    def parse_command(self, output_text: str):
+        log_path = Path("tmp/llm_raw_text.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(output_text + "\n" + "-"*80 + "\n")
+
+        method = ""
+        method_params = ""
+
+        # 提取 **Action** 标签后的文本
+        action_match = re.search(
+            r"(?:\*\*Action\*\*|Action|Navigation Goal)\s*:\s*(.*)",
+            output_text,
+            re.IGNORECASE | re.DOTALL
+        )
+
+        if action_match:
+            action_text = action_match.group(1).strip()
+            print(f"Extracted Action Text: {action_text}")
+
+            method_match = re.search(r"<(\w+)\((.*?)\)>", action_text, re.IGNORECASE | re.DOTALL)
+            if method_match:
+                method = method_match.group(1).strip()
+                method_params = method_match.group(2).strip()
+                print(f"Parsed Method: {method}, Params: {method_params}")
+            else:
+                print("No <Method(...)> found in Action text.")
+        else:
+            print("Label 'Action:' not found in LLM output. No method extracted.")
+
+        method = method
+        method_params = method_params
+
+        return method, method_params
 
 def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enabled_tools : list[str] = ["all"],
@@ -148,7 +201,7 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     )
 
     # Instantiate Memory
-    memory = Memory()
+    memory = Memory.get_instance()
 
     # Instantiate Executor with tool instances cache
     executor = Executor(

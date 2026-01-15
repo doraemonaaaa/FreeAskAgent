@@ -1,13 +1,28 @@
 from typing import Dict, Any, List, Union, Optional
 import os
+from pathlib import Path
 
 class Memory:
+    _global_instance: Optional['Memory'] = None  # 单例实例（进程内全局共享）
 
-    def __init__(self):
+    def __init__(self, max_memory_length: int = 10):
+        # 防止直接实例化，必须通过 get_instance()
+        if Memory._global_instance is not None:
+            raise RuntimeError("Use Memory.get_instance() to get the global Memory instance.")
+        
         self.query: Optional[str] = None
         self.files: List[Dict[str, str]] = []
         self.actions: Dict[str, Dict[str, Any]] = {}
+        self.max_memory_length = max_memory_length
         self._init_file_types()
+        print("✅ Initialized global shared Memory (single instance for the entire process)")
+
+    @classmethod
+    def get_instance(cls) -> 'Memory':
+        """获取进程内唯一的 Memory 实例（所有 solve 调用共享同一个 memory）"""
+        if cls._global_instance is None:
+            cls._global_instance = cls()
+        return cls._global_instance
 
     def set_query(self, query: str) -> None:
         if not isinstance(query, str):
@@ -62,15 +77,19 @@ class Memory:
                 'description': desc
             })
 
-    def add_action(self, step_count: int, tool_name: str, sub_goal: str, command: str, result: Any) -> None:
+    def add_embodied_action(self, prev_command: str) -> None:
+        # 使用 len(self.actions) 计算步数（可靠、安全）
+        step_count = len(self.actions) + 1
+        
         action = {
-            'tool_name': tool_name,
-            'sub_goal': sub_goal,
-            'command': command,
-            'result': result,
+            'previous_command': prev_command
         }
         step_name = f"Action Step {step_count}"
         self.actions[step_name] = action
+
+    def get_total_steps(self) -> int:
+        """返回当前进程内已累计的总步数（兼容旧代码，如果还有地方调用）"""
+        return len(self.actions)
 
     def get_query(self) -> Optional[str]:
         return self.query
@@ -78,6 +97,22 @@ class Memory:
     def get_files(self) -> List[Dict[str, str]]:
         return self.files
     
-    def get_actions(self) -> Dict[str, Dict[str, Any]]:
-        return self.actions
-    
+    def get_actions(self) -> Dict[str, Any]:
+        """
+        返回最近的 n 个动作。
+        如果总步数超过 max_memory_length，则仅返回最后一部分。
+        """
+        total_steps = len(self.actions)
+        
+        # 将字典转换为按步数排序的列表
+        all_steps = sorted(self.actions.items(), key=lambda x: int(x[0].split()[-1]))
+        
+        # 取最后 n 个
+        recent_steps_list = all_steps[-self.max_memory_length:]
+        recent_actions = dict(recent_steps_list)
+
+        return {
+            "total_steps": total_steps,
+            "memory_window_size": self.max_memory_length,
+            "actions": recent_actions 
+        }

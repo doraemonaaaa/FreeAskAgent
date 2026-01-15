@@ -136,13 +136,15 @@ class Planner:
 
     def generate_direct_output(self, question: str, image: str, memory: Memory) -> str:
         image_info = get_image_info(image)
-        if self.is_multimodal:
-            prompt_generate_final_output = f"""
+        if not self.is_multimodal:
+            image_info = "Null"
+
+        prompt = f"""
 # Context:
 ## Query: {question}
 ## Image: {image_info}
 
-## Actions Taken:
+## History Command (top {memory.max_memory_length}):
 {memory.get_actions()}
 
 ## VLN Task Principle Prompt:
@@ -153,8 +155,9 @@ Available tools: {self.available_tools}
 Metadata for the tools: {self.toolbox_metadata}
 # End of Context
 """
+        # print("Debug Planner Prompt: " + prompt)
 
-        input_data = [prompt_generate_final_output]
+        input_data = [prompt]
         image_paths = normalize_image_paths(image)
         if len(image_paths) > 1:
             filenames = ", ".join(os.path.basename(path) for path in image_paths)
