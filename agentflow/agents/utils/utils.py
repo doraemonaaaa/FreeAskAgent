@@ -5,17 +5,22 @@ from pyparsing import Any
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
+# image meta info
 def get_image_info(image_input: Any) -> Dict[str, Any]:
-    image_paths = normalize_image_paths(image_input)
-    if not image_paths:
+    normalized = normalize_image_inputs(image_input)
+    paths = normalized["paths"]
+    descriptions = normalized["descriptions"]
+
+    if not paths:
         return {}
 
     frames: List[Dict[str, Any]] = []
-    for index, path in enumerate(image_paths):
+    for index, (path, desc) in enumerate(zip(paths, descriptions)):
         frame_info: Dict[str, Any] = {
             "index": index,
             "image_path": path,
-            "filename": os.path.basename(path)
+            "filename": os.path.basename(path),
+            "description": desc  # 新增：如果有就放进去
         }
         if os.path.isfile(path):
             try:
@@ -40,22 +45,87 @@ def get_image_info(image_input: Any) -> Dict[str, Any]:
         image_info.update(frames[0])
     return image_info
 
-def normalize_image_paths(image_input: Any) -> List[str]:
+# 将可能嵌套的路径输入转换为一个平坦的字符串list
+def normalize_image_inputs(image_input: Any) -> Dict[str, Any]:
+    """
+    返回:
+    {
+        "paths": List[str],
+        "descriptions": List[str | None]   # 与 paths 一一对应
+    }
+    """
     paths: List[str] = []
+    descriptions: List[Optional[str]] = []
+
     if not image_input:
-        return paths
-    if isinstance(image_input, (bytes, bytearray)):
-        return paths
+        return {"paths": paths, "descriptions": descriptions}
+
+    # 处理单个字符串/路径
     if isinstance(image_input, (str, os.PathLike)):
-        candidate = os.fspath(image_input)
-        if candidate:
-            paths.append(candidate)
-        return paths
+        path = os.fspath(image_input)
+        if path:
+            paths.append(path)
+            descriptions.append(None)
+        return {"paths": paths, "descriptions": descriptions}
+
+    # 处理列表（可能嵌套）
     if isinstance(image_input, Sequence):
         for item in image_input:
-            paths.extend(normalize_image_paths(item))
-        return paths
-    return paths
+            if isinstance(item, dict) and "path" in item:
+                # 支持 {"path": "xxx.jpg", "description": "xxx"} 格式
+                path = os.fspath(item["path"])
+                desc = item.get("description")  # 可选
+                if path:
+                    paths.append(path)
+                    descriptions.append(desc)
+            elif isinstance(item, (str, os.PathLike)):
+                path = os.fspath(item)
+                if path:
+                    paths.append(path)
+                    descriptions.append(None)
+            else:
+                # 递归处理嵌套
+                sub = normalize_image_inputs(item)
+                paths.extend(sub["paths"])
+                descriptions.extend(sub["descriptions"])
+        return {"paths": paths, "descriptions": descriptions}
+
+    return {"paths": paths, "descriptions": descriptions}
+
+def append_image_bytes(
+    input_data: List[Any],
+    image_input: Any,  # 改为接受 Any，支持新格式
+    *,
+    log_prefix: str = "Image"
+) -> None:
+    normalized = normalize_image_inputs(image_input)
+    paths = normalized["paths"]
+    descriptions = normalized["descriptions"]
+
+    if not paths:
+        return
+
+    # 判断是否有任意单独描述
+    has_individual_desc = any(d is not None for d in descriptions)
+
+    # 如果没有单独描述，且多张图 → 加统一描述
+    if not has_individual_desc and len(paths) > 1:
+        filenames = ", ".join(os.path.basename(p) for p in paths)
+        input_data.append(
+            f"Consider the following {len(paths)} frames in chronological order: {filenames}."
+        )
+
+    for path, desc in zip(paths, descriptions):
+        if not os.path.isfile(path):
+            print(f"[{log_prefix}] Warning: image file not found '{path}' - skipping.")
+            continue
+        try:
+            with open(path, "rb") as f:
+                if desc is not None:          # 有单独描述 → 先加描述
+                    input_data.append(desc)
+                input_data.append(f.read())       # 再加图片字节
+        except Exception as e:
+            print(f"[{log_prefix}] Error reading image file '{path}': {e}")
 
 
 def make_json_serializable(obj):

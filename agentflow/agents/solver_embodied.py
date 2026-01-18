@@ -1,21 +1,23 @@
 import argparse
 import time
 import json
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Tuple, List
 from pathlib import Path
 import re
+import threading
 
 from ..agents.models_embodied.initializer import Initializer
 from ..agents.models_embodied.planner import Planner
 from ..agents.models_embodied.memory.memory import Memory
 from ..agents.models_embodied.executor import Executor
-from ..agents.utils.utils import make_json_serializable_truncated
+from ..agents.models_embodied.verifier import Verifier
 
 # TODO: No Tool Use
 class SolverEmbodied:
     def __init__(
         self,
         planner,
+        verifier,
         memory,
         executor,
         output_types: str = "base,final,direct",
@@ -38,8 +40,14 @@ class SolverEmbodied:
         self.temperature  = temperature
         assert all(output_type in ["base", "final", "direct"] for output_type in self.output_types), "Invalid output type. Supported types are 'base', 'final', 'direct'."
         self.verbose = verbose
+
+        # paralel running
+        self.verifier = verifier
+        self.latest_verification_result = None
+        self.verifier_image_paths = None
+        self.planner_latest_output = None
         
-    def solve(self, question: str, image_paths: Optional[Union[str, Sequence[str]]] = None, interaction_memory: Optional[str] = None):
+    def solve(self, question: str, image_paths: Any = None, interaction_memory: Optional[str] = None):
         """
         Solve a single problem from the benchmark dataset.
         
@@ -63,78 +71,74 @@ class SolverEmbodied:
                 else:
                     print(f"\n==> 🖼️ Received Image: {image_paths}")
 
-        # Generate base response if requested
-        # if 'base' in self.output_types:
-        #     base_response = self.planner.generate_base_response(question, image_paths, self.max_tokens)
-        #     json_data["base_response"] = base_response
-        #     if self.verbose:
-        #         print(f"\n==> 📝 Base Response from LLM:\n\n{base_response}")
+        if self.verbose:
+                print(f"\n==> 🐙Verifier is thinking (Deep Thinking...)")
 
-        # If only base response is needed, save and return
-        if set(self.output_types) == {'base'}:
-            return json_data
+        if self.verifier_image_paths is None:
+            self.verifier_image_paths = image_paths
+
+        prev_result_text = self.latest_verification_result
+        self.latest_verification_result = self.verifier.verificate_context(
+            question, self.verifier_image_paths, self.planner_latest_output, self.memory, previous_verification_log=prev_result_text
+        )
+        if self.verbose:
+            print(f"[Verifier] Finished. Result: {self.latest_verification_result}")
     
         # Continue with query analysis and tool execution if final or direct responses are needed
         if {'final', 'direct'} & set(self.output_types):
             if self.verbose:
                 print(f"\n==> 🐙 Reasoning Steps from AgentFlow (Deep Thinking...)")
 
-            # [1] Analyze query
-            query_start_time = time.time()
-            # query_analysis = self.planner.analyze_query(question, image_paths)
-            # json_data["query_analysis"] = query_analysis
-            # if self.verbose:
-            #     print(f"\n==> 🔍 Step 0: Query Analysis\n")
-            #     print(f"{query_analysis}")
-            #     print(f"[Time]: {round(time.time() - query_start_time, 2)}s")
-
-            # Generate final output if requested
-            if 'final' in self.output_types:
-                final_output = self.planner.generate_final_output(question, image_paths, self.memory)
-                json_data["final_output"] = final_output
-                print(f"\n==> 🐙 Detailed Solution:\n\n{final_output}")
+            palnning_start_time = time.time()
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
-                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory)
+                direct_output = self.planner.generate_direct_output(question, image_paths, self.memory, self.latest_verification_result)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
 
-            method, params = self.parse_command(json_data["direct_output"] )
-            
-            if not method:
-                self.get_logger().error("Failed to parse command, skipping action.")
-                command = None  # 或抛异常/默认动作
-            else:
-                # 复原 command 字符串
-                command = f"<{method}({params})>"
-
-            if command:
-                if interaction_memory is not None:
-                    self.memory.add_embodied_action(output_text=json_data["direct_output"], command=command, interaction_memory=interaction_memory, execution_time=round(time.time() - query_start_time, 2))
-                else:
-                    self.memory.add_embodied_action(output_text=json_data["direct_output"], command=command, execution_time=round(time.time() - query_start_time, 2))
-            memory_data = self.memory.get_actions()  # 现在返回 {"total_steps": N, "actions": {...}}
-            json_data.update({
-                "memory": memory_data,  # 包含 total_steps 和 actions，对齐了
-                "execution_time": round(time.time() - query_start_time, 2),
-            })
             # print("Memory: " + json.dumps(memory_data, ensure_ascii=False, indent=2))
+            self.planner_latest_output = json_data.get("direct_output", "")
 
-            print(f"\n[Total Time]: {round(time.time() - query_start_time, 2)}s")
+            print(f"\n[Total Time]: {round(time.time() - palnning_start_time, 2)}s")
             print(f"\n==> ✅ Query Solved!")
 
         return json_data
     
-    def parse_command(self, output_text: str):
+    def write_verify_data(self, image_paths: Any = None, interaction_memory: Optional[str] = None):
+        self.verifier_image_paths = image_paths
+        # memory
+        commands = self.parse_commands(self.planner_latest_output)
+        parsed_data = self.memory.parse_vln_output(self.planner_latest_output)
+        if commands:
+            kwargs = {
+                'belief': parsed_data.get('belief'),
+                'intention': parsed_data.get('intention'),
+                "commands": commands,
+                'state': parsed_data.get('state'),
+                "verification": self.latest_verification_result
+            }
+            if interaction_memory is not None:
+                kwargs["interaction_memory"] = interaction_memory
+
+            self.memory.add_embodied_action(**kwargs)
+    
+    @staticmethod
+    def parse_commands(output_text: str) -> List[Tuple[str, str]]:
+        """
+        Parses multiple <Action(param)> commands from LLM output text.
+
+        Returns:
+            List of tuples: [(method1, params1), (method2, params2), ...]
+        """
         log_path = Path("tmp/llm_raw_text.log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(output_text + "\n" + "-"*80 + "\n")
 
-        method = ""
-        method_params = ""
+        commands = []
 
-        # 提取 **Action** 标签后的文本
+        # 尝试匹配 Action 或 Navigation Goal 标签后的文本
         action_match = re.search(
             r"(?:\*\*Action\*\*|Action|Navigation Goal)\s*:\s*(.*)",
             output_text,
@@ -143,27 +147,28 @@ class SolverEmbodied:
 
         if action_match:
             action_text = action_match.group(1).strip()
-            print(f"Extracted Action Text: {action_text}")
+            print(f"Extracted Action Text:\n{action_text}")
 
-            method_match = re.search(r"<(\w+)\((.*?)\)>", action_text, re.IGNORECASE | re.DOTALL)
-            if method_match:
-                method = method_match.group(1).strip()
-                method_params = method_match.group(2).strip()
-                print(f"Parsed Method: {method}, Params: {method_params}")
+            # 匹配所有 <Method(params)>，多步匹配
+            method_matches = re.findall(r"<(\w+)\((.*?)\)>", action_text, re.IGNORECASE | re.DOTALL)
+            
+            if method_matches:
+                for method, params in method_matches:
+                    method = method.strip()
+                    params = params.strip()
+                    commands.append((method, params))
+                    print(f"Parsed Method: {method}, Params: {params}")
             else:
-                print("No <Method(...)> found in Action text.")
+                print("No <Method(...)> patterns found in Action text.")
         else:
-            print("Label 'Action:' not found in LLM output. No method extracted.")
+            print("Label 'Action:' not found in LLM output. No commands extracted.")
 
-        method = method
-        method_params = method_params
-
-        return method, method_params
+        return commands
     
 def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enabled_tools : list[str] = ["all"],
                      tool_engine: list[str] = ["Default"],
-                     model_engine: list[str] = ["trainable", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
+                     model_engine: list[str] = ["trainable", "dashscope", "dashscope", "dashscope"],  # [planner_main, planner_fixed, executor]
                      output_types : str = "final,direct",
                      max_steps : int = 10,
                      max_time : int = 300,
@@ -181,7 +186,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     # "trainable" means use llm_engine_name (the trainable model)
     planner_main_engine = llm_engine_name if model_engine[0] == "trainable" else model_engine[0]
     planner_fixed_engine = llm_engine_name if model_engine[1] == "trainable" else model_engine[1]
-    executor_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
+    verifier_engine = llm_engine_name if model_engine[2] == "trainable" else model_engine[2]
+    executor_engine = llm_engine_name if model_engine[3] == "trainable" else model_engine[3]
 
     # Instantiate Initializer
     initializer = Initializer(
@@ -204,6 +210,17 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         is_multimodal=enable_multimodal
     )
 
+    verifier = Verifier(
+        llm_engine_name=verifier_engine,
+        llm_engine_fixed_name=planner_fixed_engine,
+        toolbox_metadata=initializer.toolbox_metadata,
+        available_tools=initializer.available_tools,
+        verbose=verbose,
+        base_url=base_url if verifier_engine == llm_engine_name else None,
+        temperature=temperature,
+        is_multimodal=enable_multimodal
+    )
+
     # Instantiate Memory
     memory = Memory.get_instance()
 
@@ -220,6 +237,7 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     # Instantiate Solver
     solver = SolverEmbodied(
         planner=planner,
+        verifier=verifier,
         memory=memory,
         executor=executor,
         output_types=output_types,

@@ -18,7 +18,7 @@ solver = construct_solver_embodied(
     llm_engine_name=llm_engine_name,
     enabled_tools=["Base_Generator_Tool", "GroundedSAM2_Tool"],
     tool_engine=["gpt-4o"],
-    model_engine=["gpt-4o", "gpt-4o", "gpt-4o"],
+    model_engine=["gpt-4o", "gpt-4o", "gpt-4o", "gpt-4o"],
     output_types="direct",
     max_time=300,
     max_steps=1,
@@ -30,7 +30,7 @@ frame_dir = Path("test/vln")
 # image_sequence = sorted(str(path) for path in frame_dir.glob("frame_*.jpeg"))
 image_sequence = None
 if not image_sequence:
-    image_sequence = ["test/vln/input_img1.jpg"]
+    image_sequence = [{"path": "test/vln/frame_001.jpg", "description": "Ego-centric Image"},]
 
 navigation_task_prompt = """"
 Go to the store, called micheal's store.
