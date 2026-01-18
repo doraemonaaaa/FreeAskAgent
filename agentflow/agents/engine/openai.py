@@ -88,7 +88,7 @@ class ChatOpenAI(EngineLM, CachedEngine):
             super().__init__(cache_path=cache_path)
         
         if os.getenv("Proxy_API_BASE") is None:
-            raise ValueError("Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models.")
+            raise ValueError("Please set the Proxy_API_BASE environment variable if you'd like to use OpenAI models.")
         api_base = os.getenv("Proxy_API_BASE")
         if api_base:
             self.client = OpenAI(
