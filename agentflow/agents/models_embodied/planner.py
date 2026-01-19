@@ -122,7 +122,7 @@ class Planner:
         # self.query_analysis = self.llm_engine_fixed(input_data, response_format=QueryAnalysis)
 
         return str(self.query_analysis).strip()
-
+    
     def generate_direct_output(self, question: str, image_paths: Any, memory: Memory, latest_verifier_sug: str = "") -> str:  # image_paths 改为 Any
         image_info = get_image_info(image_paths) if self.is_multimodal else "Null"
 
@@ -190,17 +190,14 @@ This describe the detail of vln task principles
 ### <TurnLeft(n)>  # Turn left n degree
 ### <TurnRight(n)>  # Turn Right n degree
 ### <TurnAround()>  # Turn around for 180 degree
-
 ### <Ask(text)>
 - **Pre-condition**: MUST ONLY be used if a Human is visible AND distance < 2.0 meters.
 - **Usage**: Request social or goal-related info (e.g., "Where is the kitchen?", "Are you the person I'm looking for?").
 - **Example**: `<Ask("Excuse me, could you tell me where the apple is?")>`
-
 ### <Wait(t)>
 - **Description**: Pause execution for a specific duration.
 - **Parameters**: `t` [Float/Int] in seconds.
 - **Example**: `<Wait(5)>`
-
 ### <Stop()>
 - **Description**: Final action to terminate the task. 
 - **Usage**: Execute ONLY when the goal is fully achieved.

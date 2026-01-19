@@ -32,6 +32,10 @@ class Verifier:
         self.toolbox_metadata = toolbox_metadata if toolbox_metadata is not None else {}
         self.available_tools = available_tools if available_tools is not None else []
         self.verbose = verbose
+# delete stop in action space
+# ### <Stop()>
+# - **Description**: Final action to terminate the task. 
+# - **Usage**: Execute ONLY when the goal is fully achieved.
 
     def verificate_context(self, question: str, image_paths: Any, latest_planner_output: str, memory: Memory, previous_verification_log: str = None) -> Any:
         image_info = get_image_info(image_paths) if self.is_multimodal else "Null"
@@ -92,10 +96,6 @@ By this you can judge whether planner output good command to complete the subgoa
 - **Description**: Pause execution for a specific duration.
 - **Parameters**: `t` [Float/Int] in seconds.
 - **Example**: `<Wait(5)>`
-### <Stop()>
-- **Description**: Final action to terminate the task. 
-- **Usage**: Execute ONLY when the goal is fully achieved.
-
 ---
 
 ## Internal Task Decomposition (Hierarchy)
@@ -169,7 +169,7 @@ Explicitly cite:
 
 Subgoal:
 - [Subgoal Planning]:
-(Example)
+(This is Example)
 1. <Turn around to face the opposite direction> <Completed>  (Orientation)
 2. <Move forward until passing the area "Working at Sea"> <Current> (Traversal / Perceptual) ← Next Recommended Subgoal 
 3. <Continue forward to reach the first "Me and George European Goods"> <Not Started> (Traversal)
@@ -177,10 +177,10 @@ Subgoal:
 5. <Continue forward to reach the second "Me and George European Goods" (destination)> <Not Started> (Traversal)
 
 Last Action Feedback: 
-(Example)Planner finished task 1, turn around(memory action command is TurnAround)
+(This is Example)Planner finished task 1, turn around(memory action command is TurnAround)
 
 Planner Feedback:
-(Example)
+(This is Example)
 - The orientation subgoal of turning around has been successfully completed, as the robot’s heading has been reversed.
 - The current active subgoal is to continue moving forward to reach the area "Working at Sea".
 - No visual evidence of the target landmark is visible yet, which is expected at this stage.

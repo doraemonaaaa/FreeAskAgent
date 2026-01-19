@@ -9,9 +9,11 @@ import threading
 class Memory:
     _global_instance: Optional['Memory'] = None  # 单例实例（进程内全局共享）
 
-    def __init__(self, max_memory_length: int = 3):
+    def __init__(self, max_memory_length: int = 3, is_enable: bool = True):
         self._memory_root = Path("tmp/memory_store")
         self._memory_root.mkdir(parents=True, exist_ok=True)
+        
+        self.is_enable = is_enable
 
         # 防止直接实例化，必须通过 get_instance()
         if Memory._global_instance is not None:
@@ -25,10 +27,16 @@ class Memory:
         print("✅ Initialized global shared Memory (single instance for the entire process)")
 
     @classmethod
-    def get_instance(cls) -> 'Memory':
-        """获取进程内唯一的 Memory 实例（所有 solve 调用共享同一个 memory）"""
+    def get_instance(
+        cls,
+        max_memory_length: int = 3,
+        is_enable: bool = True
+    ) -> 'Memory':
         if cls._global_instance is None:
-            cls._global_instance = cls()
+            cls._global_instance = cls(
+                max_memory_length=max_memory_length,
+                is_enable=is_enable
+            )
         return cls._global_instance
 
     def set_query(self, query: str) -> None:
@@ -131,15 +139,24 @@ class Memory:
         return step_name
 
     def get_total_steps(self) -> int:
+        if self.is_enable == False:
+            return None
         return len(self.actions)
 
     def get_query(self) -> Optional[str]:
+        if self.is_enable == False:
+            return None
         return self.query
 
     def get_files(self) -> List[Dict[str, str]]:
+        if self.is_enable == False:
+            return None
+
         return self.files
     
     def get_actions(self) -> Dict[str, Any]:
+        if self.is_enable == False:
+            return None
         total_steps = len(self.actions)
         
         all_steps = sorted(self.actions.items(), key=lambda x: int(x[0].split()[-1]))

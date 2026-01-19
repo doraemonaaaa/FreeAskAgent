@@ -26,7 +26,9 @@ class SolverEmbodied:
         max_tokens: int = 4000,
         root_cache_dir: str = "cache",
         verbose: bool = True,
-        temperature: float = .0
+        temperature: float = .0,
+        is_enable_memory: bool = True,
+        is_use_verifier: bool = True
     ):
         self.planner = planner
         self.memory = memory
@@ -46,8 +48,11 @@ class SolverEmbodied:
         self.latest_verification_result = None
         self.verifier_image_paths = None
         self.planner_latest_output = None
+
+        self.is_use_verifier = is_use_verifier
+        self.is_enable_memory = is_enable_memory
         
-    def solve(self, question: str, image_paths: Any = None, interaction_memory: Optional[str] = None):
+    def solve(self, question: str, image_paths: Any = None):
         """
         Solve a single problem from the benchmark dataset.
         
@@ -93,6 +98,8 @@ class SolverEmbodied:
 
             # Generate direct output if requested
             if 'direct' in self.output_types:
+                if self.is_use_verifier == False:
+                    self.latest_verification_result = ""
                 direct_output = self.planner.generate_direct_output(question, image_paths, self.memory, self.latest_verification_result)
                 json_data["direct_output"] = direct_output
                 print(f"\n==> 🐙 Final Answer:\n\n{direct_output}")
@@ -179,6 +186,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      base_url : str = None,
                      temperature: float = 0.0,
                      enable_multimodal: Optional[bool] = None,
+                     is_enable_memory: bool = True,
+                     is_use_verifier: bool = True
                      ):
 
     # Parse model_engine configuration
@@ -222,7 +231,7 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
     )
 
     # Instantiate Memory
-    memory = Memory.get_instance()
+    memory = Memory.get_instance(is_enable=is_enable_memory)
 
     # Instantiate Executor with tool instances cache
     executor = Executor(
@@ -246,7 +255,9 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         max_tokens=max_tokens,
         root_cache_dir=root_cache_dir,
         verbose=verbose,
-        temperature=temperature
+        temperature=temperature,
+        is_enable_memory=is_enable_memory,
+        is_use_verifier=is_use_verifier
     )
     return solver
 
