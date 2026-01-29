@@ -9,6 +9,7 @@ from ..models_embodied.formatters import NextStep, QueryAnalysis
 from ..models_embodied.memory.memory import Memory
 from ..utils.utils import get_image_info, append_image_bytes
 from ..models_embodied.prompts.query_analysis import QuerynalysisPrompt
+from .prompts.action_space import action_space
 
 class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
@@ -184,23 +185,7 @@ Metadata for the tools: {self.toolbox_metadata}
 This describe the detail of vln task principles
 ---
 
-## Action Space
-
-### <Forward(n)>  # Move forward n meter
-### <TurnLeft(n)>  # Turn left n degree
-### <TurnRight(n)>  # Turn Right n degree
-### <TurnAround()>  # Turn around for 180 degree
-### <Ask(text)>
-- **Pre-condition**: MUST ONLY be used if a Human is visible AND distance < 2.0 meters.
-- **Usage**: Request social or goal-related info (e.g., "Where is the kitchen?", "Are you the person I'm looking for?").
-- **Example**: `<Ask("Excuse me, could you tell me where the apple is?")>`
-### <Wait(t)>
-- **Description**: Pause execution for a specific duration.
-- **Parameters**: `t` [Float/Int] in seconds.
-- **Example**: `<Wait(5)>`
-### <Stop()>
-- **Description**: Final action to terminate the task. 
-- **Usage**: Execute ONLY when the goal is fully achieved.
+{action_space("Planner")}
 
 ---
 

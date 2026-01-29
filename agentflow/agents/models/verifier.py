@@ -7,7 +7,7 @@ from typing import Any, List, Tuple
 from ..engine.factory import create_llm_engine
 from ..models.formatters import MemoryVerification
 from ..models.memory import Memory
-from ..utils.utils import get_image_info, normalize_image_paths
+from ..utils.utils import get_image_info, normalize_image_inputs
 
 
 class Verifier:
@@ -124,7 +124,7 @@ IMPORTANT: The response must end with either "Conclusion: STOP" or "Conclusion: 
 """
 
         input_data = [prompt_memory_verification]
-        image_paths = normalize_image_paths(image)
+        image_paths = normalize_image_inputs(image)
         if len(image_paths) > 1:
             filenames = ", ".join(os.path.basename(path) for path in image_paths)
             input_data.append(

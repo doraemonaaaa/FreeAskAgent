@@ -8,6 +8,7 @@ from ..engine.factory import create_llm_engine
 from ..models.formatters import MemoryVerification
 from ..models.memory import Memory
 from ..utils.utils import get_image_info, append_image_bytes, normalize_image_inputs
+from .prompts.action_space import action_space
 
 
 class Verifier:
@@ -82,20 +83,8 @@ Compare the visual evidence with the previous commands to ensure the actual traj
 
 ---
 
-## Action Space for Planner
-By this you can judge whether planner output good command to complete the subgoal.
-### <Forward(n)>  # Move forward n meter
-### <TurnLeft(n)>  # Turn left n degree
-### <TurnRight(n)>  # Turn Right n degree
-### <TurnAround()>  # Turn around for 180 degree
-### <Ask(text)>
-- **Pre-condition**: MUST ONLY be used if a Human is visible AND distance < 2.0 meters.
-- **Usage**: Request social or goal-related info (e.g., "Where is the kitchen?", "Are you the person I'm looking for?").
-- **Example**: `<Ask("Excuse me, could you tell me where the apple is?")>`
-### <Wait(t)>
-- **Description**: Pause execution for a specific duration.
-- **Parameters**: `t` [Float/Int] in seconds.
-- **Example**: `<Wait(5)>`
+{action_space("Planner")}
+
 ---
 
 ## Internal Task Decomposition (Hierarchy)

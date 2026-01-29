@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..engine.factory import create_llm_engine
 from ..models.formatters import NextStep, QueryAnalysis
 from ..models.memory import Memory
-from ..utils.utils import get_image_info, normalize_image_paths
+from ..utils.utils import get_image_info, normalize_image_inputs
 
 class Planner:
     def __init__(self, llm_engine_name: str, llm_engine_fixed_name: str = "dashscope",
@@ -58,7 +58,7 @@ class Planner:
         image_info = get_image_info(image)
 
         input_data = [question]
-        image_paths = normalize_image_paths(image)
+        image_paths = normalize_image_inputs(image)
         if len(image_paths) > 1:
             filenames = ", ".join(os.path.basename(path) for path in image_paths)
             input_data.append(
@@ -371,7 +371,7 @@ Instructions:
 """
 
         input_data = [prompt_generate_final_output]
-        image_paths = normalize_image_paths(image)
+        image_paths = normalize_image_inputs(image)
         if len(image_paths) > 1:
             filenames = ", ".join(os.path.basename(path) for path in image_paths)
             input_data.append(
@@ -431,7 +431,7 @@ Output Structure:
 """
 
         input_data = [prompt_generate_final_output]
-        image_paths = normalize_image_paths(image)
+        image_paths = normalize_image_inputs(image)
         if len(image_paths) > 1:
             filenames = ", ".join(os.path.basename(path) for path in image_paths)
             input_data.append(

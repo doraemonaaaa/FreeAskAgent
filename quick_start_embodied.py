@@ -42,4 +42,3 @@ output = solver.solve(
 )
 
 print(output.get("direct_output"))
-
