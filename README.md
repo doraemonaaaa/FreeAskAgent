@@ -12,7 +12,7 @@ Unlike prevailing approaches such as [Search-R1](https://github.com/PeterGriffin
 
 For effective planning and tool use, the framework directly **optimizes planner agent within the system** in an **online fashion** using **Flow-based Group Refined Policy Optimization (Flow-GRPO)**, achieving superior performance across diverse domains with improved tool-calling reliability and long-horizon reasoning capabilities.
 
-![flow_grpo](assets/img/flow_grpo.png)
+![Agent Framework](assets/img/FreeAskAgentFramework.jpg)
 
 ## 🚀 Key Features
 
