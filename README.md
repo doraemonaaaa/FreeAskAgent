@@ -1,7 +1,7 @@
 <a name="readme-top"></a>
 
 <h3 align="center">
-FreeAskAgent: Zero-Shot Vision-Language Navigation in Dynamic Environments via Human-inspired Thinking
+FreeAskAgent: Human Cognition-inspired Zero-Shot Vision-Language Navigation in Dynamic Environments
 </h3>
 
 
