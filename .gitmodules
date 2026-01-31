@@ -1,6 +1,6 @@
 [submodule "closed_loop"]
 	path = closed_loop
-	url = https://github.com/doraemonaaaa/freeaskworld_closed_loop
+	url = https://github.com/doraemonaaaa/freeaskworld_closed_loop.git
 [submodule "low_level/NavDP"]
 	path = low_level/NavDP
 	url = https://github.com/GS-Wang/NavDP.git
