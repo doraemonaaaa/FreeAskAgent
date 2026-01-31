@@ -6,21 +6,19 @@ FreeAskAgent: Human Cognition-inspired Zero-Shot Vision-Language Navigation in D
 
 
 ## 🌟 Why FreeAskAgent?
-FreeAskAgent is a **trainable, tool-integrated agentic framework** designed to overcome the **scalability** and **generalization limits** of today’s tool-augmented reasoning approaches. 
+FreeAskAgent is a **trainable, tool-integrated agentic framework** designed to overcome the **scalability** and **generalization limits** of today’s tool-augmented reasoning approaches and embodied ai agent framework. 
 
-Unlike prevailing approaches such as [Search-R1](https://github.com/PeterGriffinJin/Search-R1) which train a **single LLM** to interleave reasoning steps with tool calls, **FreeAskAgent** introduces a **modular agentic system** with four specialized modules: 🧭 **Planner**, 🛠 **Verifier**, ✅ **Executor**.
+Unlike prevailing approaches such as [Search-R1](https://github.com/PeterGriffinJin/Search-R1) which train a **single LLM** to interleave reasoning steps with tool calls, **FreeAskAgent** introduces a **modular agentic system** with four specialized modules: **Planner**,  **Verifier**,  **Executor**.
 
-For effective planning and tool use, the framework directly **optimizes planner agent within the system** in an **online fashion** using **Flow-based Group Refined Policy Optimization (Flow-GRPO)**, achieving superior performance across diverse domains with improved tool-calling reliability and long-horizon reasoning capabilities.
+<!-- For effective planning and tool use, the framework directly **optimizes planner agent within the system** in an **online fashion** using **Flow-based Group Refined Policy Optimization (Flow-GRPO)**, achieving superior performance across diverse domains with improved tool-calling reliability and long-horizon reasoning capabilities. -->
 
 ![Agent Framework](assets/img/FreeAskAgentFramework.jpg)
 
 ## 🚀 Key Features
 
 - 🧩 **Modular Agentic System** – Four specialized agent modules (**Planner**, **Executor**, **Verifier**, **Generator**) that coordinate via evolving memory and integrated tools across multiple turns.  
-- 🔗 **Multi-Tool Integration** – Seamlessly connect with diverse tool ecosystems, including `base_generator`, `python_coder`, `google_search`, `wikipedia_search`, `web_search`, and more.  
+- 🔗 **Multi-Tool Integration** – Seamlessly connect with diverse tool ecosystems, including `base_generator`, `python_coder`, `google_search`, `wikipedia_search`, `web_search`, `Grounded_SAN2`,  and more.  
 - 🎯 **Flow-GRPO Algorithm** – Enables **in-the-flow agent optimization** for **long-horizon reasoning tasks** with sparse rewards.
-- 📈 **Proven Results** – **FreeAskAgent (7B Backbone)** beats top baselines on 10 benchmarks, with **+14.9% search**, **+14.0% agentic**, **+14.5% math**, **+4.1% science**, even outperforming ~200B-parameter **GPT-4o**.
-
 
 ## 📑 Table of Contents
 - [⚙️ Setup](#️-setup)
@@ -43,7 +41,11 @@ For effective planning and tool use, the framework directly **optimizes planner 
 ### Prerequisites
 - **Python 3.11** (recommended)
 ```
+bash setup.sh  # set up environment automatically
 git submodule update --init --recursive  # Download submodule
+
+cd closed_loop/ros2_agent_baseline.md # If you want to set up ros2 version, follwing this readme step
+cd closed_loop/ros2.md
 ```
 ### Installation
 ```bash
@@ -81,14 +83,14 @@ python quick_start_embodied.py
 
 ## 💥 Quick Start on FreeAskAgent Flow-GRPO Training 
 For effective planning and tool use, the framework directly **optimizes the planner agent within the system in an online fashion using Flow-GRPO**. Below is a quick start for training.
-
+<!-- 
 ### (Optional) Test Your Environment
-Before diving in, we recommend verifying that FreeAskAgent's tools, LLM engines, and network configuration are properly set up. See [test_env.md](assets/doc/test_env.md) for detailed testing instructions.
+Before diving in, we recommend verifying that FreeAskAgent's tools, LLM engines, and network configuration are properly set up. See [test_env.md](assets/doc/test_env.md) for detailed testing instructions. -->
 
-
+<!-- 
 ### Dataset Preparation
-We mix two datasets for training: [NQ (Natural Questions)](https://huggingface.co/datasets/RUC-NLPIR/FlashRAG_datasets) for agentic search and [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) for mathematical reasoning.
-
+We mix two datasets for training: [NQ (Natural Questions)](https://huggingface.co/datasets/RUC-NLPIR/FlashRAG_datasets) for agentic search and [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) for mathematical reasoning. -->
+<!-- 
 ```bash
 # train data
 python data/get_train_data.py
@@ -105,7 +107,7 @@ data/
 │   └── aime24.parquet (30 samples)
 ├── aime24_data.py
 └── get_train_data.py
-```
+``` -->
 
 ### Flow-GRPO Training 
 Start FreeAskAgent training using Flow-GRPO with tmux:
@@ -129,8 +131,13 @@ We provide a comprehensive logging to monitor training. See [logs.md](assets/doc
 Communicationn with FreeAskWorld based on ROS2, main pack in closed_loop/ros2/src/vln_connector.
 Run benchmark, start simulator at first, then:
 ```bash
-bash closed_loop/ros2server.bash
+bash closed_loop/ros2server.bash # Then start the FreeAskWorld simulator
 ```
+
+## Run other baselines on FreeAskWorld
+[Vint](https://github.com/wksports/FreeAskWorld_Vint_Baseline.git)
+
+[InstructNav](https://github.com/Sinewin/freeaskworld_instructnav_baseline)
 
 ## 🧩 Use Your Own Model in FreeAskAgent
 
