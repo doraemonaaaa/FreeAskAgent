@@ -268,6 +268,10 @@ Six step from ##Action Space
 
         input_data = [prompt]
         append_image_bytes(input_data, image_paths)
+        memory_images = memory.get_memory_images()
+        if memory_images:
+            input_data.append("Memory frames from previous steps:")
+            append_image_bytes(input_data, memory_images, log_prefix="Memory Image")
 
         final_output = self.llm_engine(input_data)
         # final_output = self.llm_engine_fixed(input_data)

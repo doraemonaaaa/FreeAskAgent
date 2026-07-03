@@ -142,7 +142,7 @@ Each subgoal MUST be categorized into one of the following types:
   - Action history (memory)
   - Current visual evidence (signs, landmarks, ego orientation)
   - Common VLN heuristics (visibility, centering, passing, orientation alignment)
-  - Top-Down Cost Map and ego-centric image
+  - Ego-centric visual observations and execution history
 - The "Current" subgoal should be the earliest Not Completed one in the sequence.
 - If the planner is pursuing a wrong/misordered subgoal, explicitly note it as an error.
 
@@ -180,6 +180,10 @@ Planner Feedback:
 
         print(f"[Verifier]: Reveived {len(image_paths)} images")
         append_image_bytes(input_data, image_paths)
+        memory_images = memory.get_memory_images()
+        if memory_images:
+            input_data.append("Memory frames from previous steps:")
+            append_image_bytes(input_data, memory_images, log_prefix="Memory Image")
 
         verification = self.llm_engine(input_data)
         return verification

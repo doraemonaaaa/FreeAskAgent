@@ -28,7 +28,8 @@ class SolverEmbodied:
         verbose: bool = True,
         temperature: float = .0,
         is_enable_memory: bool = True,
-        is_use_verifier: bool = True
+        is_use_verifier: bool = True,
+        auto_write_memory: bool = True
     ):
         self.planner = planner
         self.memory = memory
@@ -51,6 +52,7 @@ class SolverEmbodied:
 
         self.is_use_verifier = is_use_verifier
         self.is_enable_memory = is_enable_memory
+        self.auto_write_memory = auto_write_memory
         
     def solve(self, question: str, image_paths: Any = None):
         """
@@ -79,6 +81,9 @@ class SolverEmbodied:
         if self.verbose:
                 print(f"\n==> 🐙Verifier is thinking (Deep Thinking...)")
 
+        if self.is_enable_memory:
+            self.memory.refresh_retrieval_context(question)
+
         if self.verifier_image_paths is None:
             self.verifier_image_paths = image_paths
 
@@ -106,13 +111,21 @@ class SolverEmbodied:
 
             # print("Memory: " + json.dumps(memory_data, ensure_ascii=False, indent=2))
             self.planner_latest_output = json_data.get("direct_output", "")
+            if self.is_enable_memory and self.auto_write_memory:
+                self.write_verify_data(image_paths=image_paths)
 
             print(f"\n[Total Time]: {round(time.time() - palnning_start_time, 2)}s")
             print(f"\n==> ✅ Query Solved!")
 
         return json_data
     
-    def write_verify_data(self, image_paths: Any = None, interaction_memory: Optional[str] = None):
+    def write_verify_data(
+        self,
+        image_paths: Any = None,
+        interaction_memory: Optional[str] = None,
+        task_context: Optional[str] = None,
+        raw_planner_output: Optional[str] = None
+    ):
         self.verifier_image_paths = image_paths
         # memory
         commands = self.parse_commands(self.planner_latest_output)
@@ -123,7 +136,10 @@ class SolverEmbodied:
                 'intention': parsed_data.get('intention'),
                 "commands": commands,
                 'state': parsed_data.get('state'),
-                "verification": self.latest_verification_result
+                "verification": self.latest_verification_result,
+                "image_paths": image_paths,
+                "task_context": task_context,
+                "raw_planner_output": raw_planner_output
             }
             if interaction_memory is not None:
                 kwargs["interaction_memory"] = interaction_memory
@@ -187,7 +203,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      temperature: float = 0.0,
                      enable_multimodal: Optional[bool] = None,
                      is_enable_memory: bool = True,
-                     is_use_verifier: bool = True
+                     is_use_verifier: bool = True,
+                     auto_write_memory: bool = True
                      ):
 
     # Parse model_engine configuration
@@ -232,6 +249,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
 
     # Instantiate Memory
     memory = Memory.get_instance(is_enable=is_enable_memory)
+    if is_enable_memory:
+        memory.configure_generator(planner.llm_engine, enabled=True)
 
     # Instantiate Executor with tool instances cache
     executor = Executor(
@@ -257,7 +276,8 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         verbose=verbose,
         temperature=temperature,
         is_enable_memory=is_enable_memory,
-        is_use_verifier=is_use_verifier
+        is_use_verifier=is_use_verifier,
+        auto_write_memory=auto_write_memory
     )
     return solver
 

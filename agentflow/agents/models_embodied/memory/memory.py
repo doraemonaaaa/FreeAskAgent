@@ -1,9 +1,29 @@
-from typing import Dict, Any, List, Union, Optional, Tuple
+from typing import Dict, Any, List, Union, Optional, Tuple, Iterable
 import os
+import json
 from pathlib import Path
 import re
 import shutil
 import threading
+import math
+
+try:
+    import openai
+except Exception:
+    openai = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except Exception:
+    SentenceTransformer = None
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+from .graph_memory import GraphMemory
+from .retrieval import retrieve_from_graph, collect_memories
 
 
 class Memory:
@@ -23,6 +43,18 @@ class Memory:
         self.actions: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         self.max_memory_length = max_memory_length
+        self._next_clip_id = 0
+        self._graph = GraphMemory()
+        self._clip_images: Dict[int, List[str]] = {}
+        self._last_retrieval: Dict[str, Any] = {}
+        self._embedding_backend = os.environ.get("EMBEDDING_BACKEND", "openai").lower()
+        self._embedding_model = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
+        self._image_embedding_model = os.environ.get("LOCAL_IMAGE_EMBEDDING_MODEL", "clip-ViT-B-32")
+        self._openai_client = None
+        self._local_embedder = None
+        self._local_image_embedder = None
+        self._generator_llm = None
+        self._generator_enabled = False
         self._init_file_types()
         print("✅ Initialized global shared Memory (single instance for the entire process)")
 
@@ -96,6 +128,14 @@ class Memory:
         self.query = None
         self.files.clear()
         self.actions.clear()
+        self._graph = GraphMemory()
+        self._clip_images.clear()
+        self._last_retrieval = {}
+        self._next_clip_id = 0
+        self._generator_llm = None
+        self._generator_enabled = False
+        self._local_embedder = None
+        self._local_image_embedder = None
 
         if self._memory_root.exists():
             for p in self._memory_root.glob("*"):
@@ -116,6 +156,9 @@ class Memory:
         state: str, 
         verification: str,
         commands: List[Tuple[str, str]] = None,
+        image_paths: Any = None,
+        raw_planner_output: Optional[str] = None,
+        task_context: Optional[str] = None,
         interaction_memory: Optional[str] = None,
         execution_time: Optional[float] = None
     ) -> None:
@@ -135,6 +178,17 @@ class Memory:
 
         with self._lock:
             self.actions[step_name] = action
+            self._add_multimodal_memory(
+                belief=belief,
+                intention=intention,
+                state=state,
+                verification=verification,
+                commands=commands,
+                interaction_memory=interaction_memory,
+                image_paths=image_paths,
+                raw_planner_output=raw_planner_output,
+                task_context=task_context
+            )
 
         return step_name
 
@@ -166,9 +220,329 @@ class Memory:
         return {
             "total_steps": total_steps,
             "memory_window_size": self.max_memory_length,
-            "actions": recent_actions
+            "actions": recent_actions,
+            "retrieved_memories": self._last_retrieval or None
         }
 
+    def refresh_retrieval_context(self, query: str, topk: int = 3) -> None:
+        if self.is_enable == False:
+            return
+        if not query:
+            self._last_retrieval = {}
+            return
+        self._last_retrieval = self.retrieve_context(query=query, topk=topk)
+
+    def get_memory_images(self) -> List[str]:
+        if self.is_enable == False:
+            return []
+        images = []
+        retrieved = self._last_retrieval.get("clips", []) if self._last_retrieval else []
+        for clip in retrieved:
+            images.extend(clip.get("images", []))
+        return images
+
+    def retrieve_context(self, query: str, topk: int = 3) -> Dict[str, Any]:
+        if self.is_enable == False:
+            return {}
+        if not self._graph.text_nodes:
+            return {}
+        query_embs = self._embed_texts([query])
+        top_clips, clip_ranked, _ = retrieve_from_graph(self._graph, query_embs, topk=topk, threshold=0.0)
+        memories = collect_memories(self._graph, top_clips)
+        clips = []
+        for clip_id in top_clips:
+            score = 0.0
+            for cid, s in clip_ranked:
+                if cid == clip_id:
+                    score = s
+                    break
+            clips.append({
+                "clip_id": clip_id,
+                "score": score,
+                "episodic": memories.get(clip_id, {}).get("episodic", []),
+                "semantic": memories.get(clip_id, {}).get("semantic", []),
+                "images": list(self._clip_images.get(clip_id, []))
+            })
+        return {"query": query, "clips": clips}
+
+    def configure_generator(self, llm_engine, enabled: bool = True) -> None:
+        self._generator_llm = llm_engine
+        self._generator_enabled = enabled and llm_engine is not None
+
+    def _add_multimodal_memory(
+        self,
+        belief: str,
+        intention: str,
+        state: str,
+        verification: str,
+        commands: Optional[List[Tuple[str, str]]],
+        interaction_memory: Optional[str],
+        image_paths: Any,
+        raw_planner_output: Optional[str],
+        task_context: Optional[str]
+    ) -> None:
+        clip_id = self._next_clip_id
+        self._next_clip_id += 1
+
+        episodic_text = None
+        semantic_text = None
+        if self._generator_enabled:
+            episodic_text, semantic_text = self._generate_memory_via_llm(
+                clip_id=clip_id,
+                belief=belief,
+                intention=intention,
+                state=state,
+                verification=verification,
+                commands=commands,
+                interaction_memory=interaction_memory,
+                raw_planner_output=raw_planner_output,
+                task_context=task_context,
+                image_paths=image_paths
+            )
+
+        if not episodic_text:
+            episodic_text = self._format_episodic_text(
+                belief=belief,
+                intention=intention,
+                state=state,
+                verification=verification,
+                commands=commands,
+                interaction_memory=interaction_memory,
+                clip_id=clip_id
+            )
+        if not semantic_text:
+            semantic_text = self._format_semantic_text(
+                belief=belief,
+                intention=intention,
+                state=state,
+                verification=verification,
+                interaction_memory=interaction_memory,
+                clip_id=clip_id
+            )
+
+        texts = [episodic_text]
+        types = ["episodic"]
+        if semantic_text:
+            texts.append(semantic_text)
+            types.append("semantic")
+
+        text_embeddings = self._embed_texts(texts)
+        text_node_ids = []
+        for text, emb, mem_type in zip(texts, text_embeddings, types):
+            node_id = self._graph.add_text_node(
+                {"contents": [text], "embeddings": [emb]},
+                clip_id=clip_id,
+                text_type=mem_type
+            )
+            text_node_ids.append(node_id)
+
+        if image_paths:
+            from ...utils.utils import normalize_image_inputs
+            normalized = normalize_image_inputs(image_paths)
+            if normalized["paths"]:
+                self._clip_images[clip_id] = list(normalized["paths"])
+                img_embeddings = self._embed_images(normalized["paths"])
+                if img_embeddings:
+                    img_node_id = self._graph.add_img_node(
+                        {"contents": list(normalized["paths"]), "embeddings": img_embeddings}
+                    )
+                    for text_node_id in text_node_ids:
+                        self._graph.add_edge(img_node_id, text_node_id)
+
+    def _format_episodic_text(
+        self,
+        belief: str,
+        intention: str,
+        state: str,
+        verification: str,
+        commands: Optional[List[Tuple[str, str]]],
+        interaction_memory: Optional[str],
+        clip_id: int
+    ) -> str:
+        parts = [
+            f"CLIP_{clip_id} Episodic Memory",
+            f"Belief: {belief}",
+            f"Intention: {intention}",
+            f"State: {state}",
+            f"Verification: {verification}",
+        ]
+        if commands:
+            cmd_text = "; ".join([f"{name}({params})" for name, params in commands])
+            parts.append(f"Commands: {cmd_text}")
+        if interaction_memory:
+            parts.append(f"Interaction: {interaction_memory}")
+        return "\n".join(parts)
+
+    def _format_semantic_text(
+        self,
+        belief: str,
+        intention: str,
+        state: str,
+        verification: str,
+        interaction_memory: Optional[str],
+        clip_id: int
+    ) -> Optional[str]:
+        summary_parts = []
+        if belief:
+            summary_parts.append(f"Belief summary: {belief}")
+        if intention:
+            summary_parts.append(f"Intention summary: {intention}")
+        if state:
+            summary_parts.append(f"State: {state}")
+        if verification:
+            summary_parts.append(f"Verifier feedback: {verification}")
+        if interaction_memory:
+            summary_parts.append(f"Interaction: {interaction_memory}")
+        if not summary_parts:
+            return None
+        return f"CLIP_{clip_id} Semantic Memory\n" + "\n".join(summary_parts)
+
+    def _generate_memory_via_llm(
+        self,
+        clip_id: int,
+        belief: str,
+        intention: str,
+        state: str,
+        verification: str,
+        commands: Optional[List[Tuple[str, str]]],
+        interaction_memory: Optional[str],
+        raw_planner_output: Optional[str],
+        task_context: Optional[str],
+        image_paths: Any
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if not self._generator_llm:
+            return None, None
+
+        commands_text = ""
+        if commands:
+            commands_text = "; ".join([f"{name}({params})" for name, params in commands])
+
+        prompt = f"""
+You are a memory generator for a VLN embodied agent.
+Generate two memories for the current step:
+1) episodic_memory: concrete observations, actions, and immediate outcomes.
+2) semantic_memory: higher-level conclusion useful for long-horizon planning.
+
+Return JSON only:
+{{
+  "episodic_memory": "...",
+  "semantic_memory": "..."
+}}
+
+Context:
+- Clip ID: {clip_id}
+- Task: {task_context or "N/A"}
+- Belief: {belief}
+- Intention: {intention}
+- State: {state}
+- Commands: {commands_text or "None"}
+- Verification: {verification}
+- Interaction Memory: {interaction_memory or "None"}
+- Planner Output (raw): {raw_planner_output or "None"}
+"""
+
+        input_data = [prompt]
+        if image_paths:
+            try:
+                from ...utils.utils import append_image_bytes
+                append_image_bytes(input_data, image_paths, log_prefix="Memory Generator")
+            except Exception as e:
+                print(f"[Memory] Failed to append image bytes: {e}")
+
+        try:
+            response = self._generator_llm(input_data)
+        except Exception as e:
+            print(f"[Memory] Memory generator failed: {e}")
+            return None, None
+
+        episodic = None
+        semantic = None
+        if isinstance(response, str):
+            try:
+                data = json.loads(response)
+                episodic = data.get("episodic_memory")
+                semantic = data.get("semantic_memory")
+            except Exception:
+                episodic = None
+                semantic = None
+        return episodic, semantic
+
+    def _embed_texts(self, texts: Iterable[str]) -> List[List[float]]:
+        texts = list(texts)
+        if not texts:
+            return []
+
+        if self._embedding_backend == "local":
+            try:
+                if self._local_embedder is None:
+                    if SentenceTransformer is None:
+                        raise RuntimeError("sentence-transformers is not installed.")
+                    model_name = os.environ.get("LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+                    self._local_embedder = SentenceTransformer(model_name)
+                embeddings = self._local_embedder.encode(texts, normalize_embeddings=True)
+                return [emb.tolist() for emb in embeddings]
+            except Exception as e:
+                print(f"[Memory] Local embeddings failed, falling back to hash embeddings: {e}")
+                return [self._hash_embedding(text) for text in texts]
+
+        if openai is not None:
+            try:
+                if self._openai_client is None:
+                    self._openai_client = openai.OpenAI()
+                embeddings = self._openai_client.embeddings.create(
+                    input=texts,
+                    model=self._embedding_model
+                )
+                return [item.embedding for item in embeddings.data]
+            except Exception as e:
+                print(f"[Memory] OpenAI embeddings failed, falling back to hash embeddings: {e}")
+
+        return [self._hash_embedding(text) for text in texts]
+
+    def _embed_images(self, image_paths: List[str]) -> List[List[float]]:
+        if not image_paths:
+            return []
+        if self._embedding_backend == "local":
+            try:
+                if self._local_image_embedder is None:
+                    if SentenceTransformer is None:
+                        raise RuntimeError("sentence-transformers is not installed.")
+                    self._local_image_embedder = SentenceTransformer(self._image_embedding_model)
+                if Image is None:
+                    raise RuntimeError("PIL is not installed.")
+                images = []
+                for path in image_paths:
+                    try:
+                        images.append(Image.open(path).convert("RGB"))
+                    except Exception:
+                        continue
+                if not images:
+                    return []
+                embeddings = self._local_image_embedder.encode(images, normalize_embeddings=True)
+                return [emb.tolist() for emb in embeddings]
+            except Exception as e:
+                print(f"[Memory] Local image embeddings failed, falling back to hash embeddings: {e}")
+        return [self._hash_embedding(path) for path in image_paths]
+
+    @staticmethod
+    def _hash_embedding(text: str, dim: int = 384) -> List[float]:
+        vec = [0.0] * dim
+        if not text:
+            return vec
+        data = text.encode("utf-8", errors="ignore")
+        for i, b in enumerate(data):
+            vec[i % dim] += (b % 13) - 6
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    @staticmethod
+    def _cosine_similarity(a: List[float], b: List[float]) -> float:
+        if not a or not b:
+            return 0.0
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
+        norm_b = math.sqrt(sum(y * y for y in b)) or 1.0
+        return dot / (norm_a * norm_b)
     
     def parse_vln_output(self, output_text: str) -> Dict[str, Any]:
         """
