@@ -156,6 +156,26 @@ def create_llm_engine(model_string: str, use_cache: bool = False, is_multimodal:
         print("serving ")
         return ChatVLLM(**config)
 
+    # === Local Qwen3-VL via Transformers ===
+    elif model_string.startswith("local-qwen3vl"):
+        from .local_qwen3vl import LocalQwen3VL
+
+        model_path = kwargs.get("model_path")
+        if model_string.startswith("local-qwen3vl-"):
+            model_path = model_string.replace("local-qwen3vl-", "", 1)
+
+        config = {
+            "model_string": model_path,
+            "model_path": model_path,
+            "use_cache": use_cache,
+            "is_multimodal": is_multimodal,
+            "torch_dtype": kwargs.get("torch_dtype", "auto"),
+            "device_map": kwargs.get("device_map", "auto"),
+            "trust_remote_code": kwargs.get("trust_remote_code", False),
+            "debug_performance": kwargs.get("debug_performance", False),
+        }
+        return LocalQwen3VL(**config)
+
     # === LiteLLM ===
     elif "litellm" in model_string:
         from .litellm import ChatLiteLLM

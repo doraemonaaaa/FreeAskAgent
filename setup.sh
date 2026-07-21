@@ -6,6 +6,12 @@ set -e
 # Switch to project root directory
 # cd YOUR_ROOT_PATH
 
+PROJECT_ROOT="$(pwd)"
+export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
+export UV_CACHE_DIR="$PROJECT_ROOT/.uv_cache"
+export UV_LINK_MODE=copy
+mkdir -p "$UV_CACHE_DIR"
+
 # Install UV (if not already installed)
 if ! command -v uv &> /dev/null
 then
@@ -23,9 +29,10 @@ fi
  echo "Activating virtual environment..."
 source .venv/bin/activate
 
+printf 'source .venv/bin/activate\nexport PYTHONPATH="%s:${PYTHONPATH:-}"\nexport UV_CACHE_DIR="%s/.uv_cache"\nexport UV_LINK_MODE=copy\n' "$PROJECT_ROOT" "$PROJECT_ROOT" > source_env.sh
+
 cd agentflow
 uv pip install -r requirements.txt
-uv pip install --no-deps -e .
 cd ..
 
 # Install project dependencies (development mode)
@@ -73,15 +80,20 @@ sudo apt-get install -y jq
 uv pip install yq
 
 # SAM2 Tool setup
-echo "Setting up SAM2 Tool..."
-uv pip install git+https://github.com/facebookresearch/sam2.git
+# echo "Setting up SAM2 Tool..."
+# uv pip install git+https://github.com/facebookresearch/sam2.git
 
 # Grounded SAM2 Tool setup
-echo "Setting up Grounded SAM2 Tool..."
-uv pip install groundingdino-py sam-2
+# echo "Setting up Grounded SAM2 Tool..."
+# uv pip install groundingdino-py sam-2
 
 # Map setup
-echo "Setting up Map dependencies..."
-uv pip install open3d
-uv pip install numpy-quaternion
-uv pip install pathfinding
+# echo "Setting up Map dependencies..."
+# uv pip install open3d
+# uv pip install numpy-quaternion
+# uv pip install pathfinding
+
+# Local Qwen3 VL
+uv pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 triton==3.2.0
+uv pip install "numpy>=2.0.0,<2.8.0" scipy
+uv pip install "transformers>=4.57.0" accelerate==1.7.0 deepspeed==0.17.1 peft==0.17.1 datasets pillow safetensors qwen-vl-utils torchcodec==0.2
