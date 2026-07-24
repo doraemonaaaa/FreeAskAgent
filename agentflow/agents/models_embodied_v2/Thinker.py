@@ -6,9 +6,26 @@ from typing import Any, Deque, List, Optional, Tuple
 
 from agentflow.agents.engine.factory import create_llm_engine
 from .Actor import Actor, DEFAULT_MODEL_PATH
-from .long_term import LongTermPlanner
 from .rag import NavigationRAG
 from .short_term import ShortTermThinker
+
+
+SUBTASK_DECOMPOSITION_PROMPT = """You are the task planner for a visual navigation robot.
+Given the original task, decompose it into an ordered, minimal list of observable
+navigation subtasks. For every subtask, include a `Completion status` initialized
+to `NOT STARTED`. Preserve the original task and use this exact structure:
+Original task: ...
+1. Subtask: ... | Completion status: NOT STARTED
+2. Subtask: ... | Completion status: NOT STARTED
+Do not provide action tokens or a next-action directive."""
+
+
+COMPLETION_STATUS_PROMPT = """You maintain an existing visual-navigation subtask
+tracker. Do not create, remove, reorder, split, or rewrite subtasks. Using the
+current RGB observation, recent actions, and retrieved knowledge, update only each
+subtask's `Completion status` to `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, or
+`BLOCKED` (with a short reason only when BLOCKED). Return the same tracker format.
+Do not provide action tokens or a next-action directive."""
 
 
 class Thinker:
@@ -18,10 +35,12 @@ class Thinker:
         if long_term_interval < 1:
             raise ValueError("long_term_interval must be at least 1.")
         self.goal, self.actor, self.show_output = goal, actor, show_output
+        # Retained for API compatibility; subtask decomposition happens exactly once.
         self.long_term_interval = long_term_interval
         llm = create_llm_engine(model_string=f"local-qwen3vl-{planner_model_path}", is_multimodal=True, use_cache=use_cache, debug_performance=debug_performance)
         self.rag = NavigationRAG(documents=rag_documents, path=rag_path)
-        self.long_term, self.short_term = LongTermPlanner(llm, goal), ShortTermThinker(llm)
+        self._llm, self.short_term = llm, ShortTermThinker(llm)
+        self._subtask_tracker: Optional[str] = None
         self._directive, self._actions = bootstrap_instruction or goal, deque(maxlen=8)
         self._lock, self._condition = threading.Lock(), threading.Condition()
         self._pending: Optional[Tuple[bytes, Tuple[str, ...], str]] = None
@@ -33,6 +52,12 @@ class Thinker:
     def directive(self) -> str:
         with self._lock:
             return self._directive
+
+    @property
+    def subtask_tracker(self) -> Optional[str]:
+        """The fixed subtask list with its latest completion statuses."""
+        with self._lock:
+            return self._subtask_tracker
 
     def submit_observation(self, rgb_image: Any) -> str:
         image_bytes = self.actor.rgb_to_bytes(rgb_image)
@@ -64,16 +89,20 @@ class Thinker:
                 self._pending = None
             try:
                 retrieved = self.rag.search(f"{self.goal} {prior}")
-                if self._thought_count % self.long_term_interval == 0:
-                    plan = self.long_term.update(actions, retrieved, image_bytes)
+                with self._lock:
+                    tracker = self._subtask_tracker
+                if tracker is None:
+                    tracker = self._decompose_original_task()
                     if self.show_output:
-                        print(f"[ModelA long-term] {plan}", flush=True)
+                        print(f"[ModelA subtasks] {tracker}", flush=True)
                 else:
-                    plan = self.long_term.plan
-                directive = self.short_term.analyze(image_bytes, plan, actions, retrieved)
+                    tracker = self._update_completion_status(tracker, actions, retrieved, image_bytes)
+                    if self.show_output:
+                        print(f"[ModelA completion status] {tracker}", flush=True)
+                directive = self.short_term.analyze(image_bytes, tracker, actions, retrieved)
                 self._thought_count += 1
                 with self._lock:
-                    self._directive, self._error = directive, None
+                    self._subtask_tracker, self._directive, self._error = tracker, directive, None
                 if self.show_output:
                     print(f"[ModelA short-term] {directive}", flush=True)
             except Exception as exc:
@@ -81,3 +110,34 @@ class Thinker:
                     self._error = exc
                 if self.show_output:
                     print(f"[ModelA thinker error] {exc}", flush=True)
+
+    def _decompose_original_task(self) -> str:
+        """Create the tracker once, using only the task supplied at construction."""
+        tracker = self._llm(
+            f"Original task: {self.goal}",
+            system_prompt=SUBTASK_DECOMPOSITION_PROMPT,
+            max_tokens=240,
+            temperature=0,
+        ).strip()
+        if not tracker:
+            raise ValueError("Subtask planner returned an empty tracker.")
+        return tracker
+
+    def _update_completion_status(self, tracker: str, actions: Tuple[str, ...], retrieved: List[str], image_bytes: bytes) -> str:
+        """Update statuses without allowing the model to re-plan the task."""
+        prompt = (
+            f"Original task: {self.goal}\n"
+            f"Existing subtask tracker:\n{tracker}\n"
+            f"Recent actions: {list(actions)}\n"
+            f"Retrieved knowledge: {list(retrieved)}\n"
+            "Update only the Completion status fields."
+        )
+        updated_tracker = self._llm(
+            [prompt, image_bytes],
+            system_prompt=COMPLETION_STATUS_PROMPT,
+            max_tokens=240,
+            temperature=0,
+        ).strip()
+        if not updated_tracker:
+            raise ValueError("Completion-status updater returned an empty tracker.")
+        return updated_tracker

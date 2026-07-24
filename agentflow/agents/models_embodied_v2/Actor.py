@@ -8,16 +8,17 @@ from typing import Any, List, Optional, Union
 from agentflow.agents.engine.factory import create_llm_engine
 
 DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
-FORWARD_0_1M = "FORWARD_0_1M"
-TURN_LEFT_15 = "TURN_LEFT_15"
-TURN_RIGHT_15 = "TURN_RIGHT_15"
-ACTION_TOKENS = (FORWARD_0_1M, TURN_LEFT_15, TURN_RIGHT_15)
-ACTOR_PROMPT = """Return exactly one token: FORWARD_0_1M, TURN_LEFT_15, or TURN_RIGHT_15.
+FORWARD = "FORWARD"
+TURN_LEFT = "TURN_LEFT"
+TURN_RIGHT = "TURN_RIGHT"
+STOP = "STOP"
+ACTION_TOKENS = (FORWARD, TURN_LEFT, TURN_RIGHT, STOP)
+ACTOR_PROMPT = """Return exactly one token: FORWARD, TURN_LEFT, TURN_RIGHT, or STOP.
 Given an RGB image and navigation instruction, output no explanation."""
 
 
 class Actor:
-    """ModelB action policy with the fixed three-token action space."""
+    """ModelB action policy with the fixed action token space."""
 
     def __init__(self, model_path: str = DEFAULT_MODEL_PATH, *, debug_performance: bool = True, use_cache: bool = False):
         self.model_path = model_path
@@ -58,7 +59,7 @@ class Actor:
 
     @staticmethod
     def parse_action(response: str) -> str:
-        matches = re.findall(r"\b(?:FORWARD_0_1M|TURN_LEFT_15|TURN_RIGHT_15)\b", response)
+        matches = re.findall(r"\b(?:FORWARD|TURN_LEFT|TURN_RIGHT|STOP)\b", response)
         if len(matches) != 1:
             raise ValueError(f"ModelB returned invalid action {response!r}; expected one of {ACTION_TOKENS}.")
         return matches[0]
