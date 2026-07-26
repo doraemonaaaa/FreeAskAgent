@@ -11,6 +11,7 @@ from ..agents.models_embodied.planner import Planner
 from ..agents.models_embodied.memory.memory import Memory
 from ..agents.models_embodied.executor import Executor
 from ..agents.models_embodied.verifier import Verifier
+from ..agents.models_embodied.uncertainty import UncertaintyEstimator
 
 # TODO: No Tool Use
 class SolverEmbodied:
@@ -29,7 +30,10 @@ class SolverEmbodied:
         temperature: float = .0,
         is_enable_memory: bool = True,
         is_use_verifier: bool = True,
-        auto_write_memory: bool = True
+        auto_write_memory: bool = True,
+        w_vis: float = 1.0,
+        w_policy: float = 1.0,
+        w_memory: float = 1.0
     ):
         self.planner = planner
         self.memory = memory
@@ -53,7 +57,11 @@ class SolverEmbodied:
         self.is_use_verifier = is_use_verifier
         self.is_enable_memory = is_enable_memory
         self.auto_write_memory = auto_write_memory
-        
+
+        self.uncertainty_estimator = UncertaintyEstimator(
+            w_vis=w_vis, w_policy=w_policy, w_memory=w_memory
+        )
+
     def solve(self, question: str, image_paths: Any = None):
         """
         Solve a single problem from the benchmark dataset.
@@ -83,6 +91,10 @@ class SolverEmbodied:
 
         if self.is_enable_memory:
             self.memory.refresh_retrieval_context(question)
+            uncertainty = self.uncertainty_estimator.compute(self.memory, image_paths)
+            json_data["uncertainty"] = uncertainty
+            if self.verbose:
+                print(f"\n==> 📐 Uncertainty: {uncertainty}")
 
         if self.verifier_image_paths is None:
             self.verifier_image_paths = image_paths
@@ -204,7 +216,10 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
                      enable_multimodal: Optional[bool] = None,
                      is_enable_memory: bool = True,
                      is_use_verifier: bool = True,
-                     auto_write_memory: bool = True
+                     auto_write_memory: bool = True,
+                     w_vis: float = 1.0,
+                     w_policy: float = 1.0,
+                     w_memory: float = 1.0
                      ):
 
     # Parse model_engine configuration
@@ -277,6 +292,9 @@ def construct_solver_embodied(llm_engine_name : str = "gpt-4o",
         temperature=temperature,
         is_enable_memory=is_enable_memory,
         is_use_verifier=is_use_verifier,
+        w_vis=w_vis,
+        w_policy=w_policy,
+        w_memory=w_memory,
         auto_write_memory=auto_write_memory
     )
     return solver

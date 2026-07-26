@@ -543,7 +543,56 @@ Context:
         norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
         norm_b = math.sqrt(sum(y * y for y in b)) or 1.0
         return dot / (norm_a * norm_b)
-    
+
+    @staticmethod
+    def _mean_vector(vectors: List[List[float]]) -> List[float]:
+        if not vectors:
+            return []
+        dim = len(vectors[0])
+        summed = [0.0] * dim
+        for vec in vectors:
+            for i, x in enumerate(vec):
+                summed[i] += x
+        return [x / len(vectors) for x in summed]
+
+    @staticmethod
+    def _l2_distance(a: List[float], b: List[float]) -> float:
+        if not a or not b:
+            return 0.0
+        return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
+    def compute_observation_uncertainty(self, image_paths: Any) -> float:
+        """
+        Umemory = ||f(o_t) - f(M_t)||: inconsistency between the current observation
+        and the most recently stored image memory (M_t = previous step's img node).
+        Returns 0.0 when disabled, no current image, or no prior memory to compare against.
+        """
+        if self.is_enable == False or not image_paths:
+            return 0.0
+
+        last_img_node = None
+        for node_id in sorted(self._graph.nodes.keys(), reverse=True):
+            node = self._graph.nodes[node_id]
+            if node.type == "img":
+                last_img_node = node
+                break
+
+        if last_img_node is None or not last_img_node.embeddings:
+            return 0.0
+
+        from ...utils.utils import normalize_image_inputs
+        normalized = normalize_image_inputs(image_paths)
+        if not normalized["paths"]:
+            return 0.0
+
+        obs_embeddings = self._embed_images(normalized["paths"])
+        if not obs_embeddings:
+            return 0.0
+
+        obs_vec = self._mean_vector(obs_embeddings)
+        mem_vec = self._mean_vector(last_img_node.embeddings)
+        return self._l2_distance(obs_vec, mem_vec)
+
     def parse_vln_output(self, output_text: str) -> Dict[str, Any]:
         """
         Parse the VLN output text to extract Belief, Intention, and State sections.

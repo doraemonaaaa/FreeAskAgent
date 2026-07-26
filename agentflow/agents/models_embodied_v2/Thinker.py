@@ -2,13 +2,11 @@
 
 import threading
 from collections import deque
-from typing import Any, Deque, List, Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from agentflow.agents.engine.factory import create_llm_engine
 from .Actor import Actor, DEFAULT_MODEL_PATH
 from .memory import TaskMemory
-from .memory.rag import NavigationRAG
-from .memory.short_term import ShortTermThinker
 
 
 SUBTASK_DECOMPOSITION_PROMPT = """You are the task planner for a visual navigation robot.
@@ -23,29 +21,30 @@ Do not provide action tokens or a next-action directive."""
 
 COMPLETION_STATUS_PROMPT = """You maintain an existing visual-navigation subtask
 tracker. Do not create, remove, reorder, split, or rewrite subtasks. Using the
-current RGB observation, recent actions, and retrieved knowledge, update only each
-subtask's `Completion status` to `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, or
-`BLOCKED` (with a short reason only when BLOCKED). Return the same tracker format.
+current RGB observation and recent actions, update only each subtask's
+`Completion status` to `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, or `BLOCKED`
+(with a short reason only when BLOCKED). Return the same tracker format.
 Do not provide action tokens or a next-action directive."""
+
+
+DIRECTIVE_PROMPT = """You are the multimodal visual thinker for a navigation robot.
+Inspect the current RGB image and combine it with the task memory and recent actions.
+Report local progress, visible obstacles, and a precise next directive for ModelB.
+ModelB can only move forward 0.1 m or turn left/right 15 degrees. Do not output an
+action token; output a concise directive."""
 
 
 class Thinker:
     """Keep ModelA planning asynchronously while ModelB continues acting."""
 
-    def __init__(self, goal: str, actor: Actor, *, planner_model_path: str = DEFAULT_MODEL_PATH, bootstrap_instruction: Optional[str] = None, debug_performance: bool = False, use_cache: bool = False, show_output: bool = True, long_term_interval: int = 8, rag_documents: Optional[List[str]] = None, rag_path: Optional[str] = None):
-        if long_term_interval < 1:
-            raise ValueError("long_term_interval must be at least 1.")
+    def __init__(self, goal: str, actor: Actor, *, planner_model_path: str = DEFAULT_MODEL_PATH, bootstrap_instruction: Optional[str] = None, debug_performance: bool = False, use_cache: bool = False, show_output: bool = True):
         self.goal, self.actor, self.show_output = goal, actor, show_output
-        # Retained for API compatibility; subtask decomposition happens exactly once.
-        self.long_term_interval = long_term_interval
-        llm = create_llm_engine(model_string=f"local-qwen3vl-{planner_model_path}", is_multimodal=True, use_cache=use_cache, debug_performance=debug_performance)
-        self.rag = NavigationRAG(documents=rag_documents, path=rag_path)
-        self._llm, self.short_term = llm, ShortTermThinker(llm)
+        self._llm = create_llm_engine(model_string=f"local-qwen3vl-{planner_model_path}", is_multimodal=True, use_cache=use_cache, debug_performance=debug_performance)
         self.task_memory = TaskMemory(goal)
         self._subtask_tracker: Optional[str] = None
         self._directive, self._actions = bootstrap_instruction or goal, deque(maxlen=8)
         self._lock, self._condition = threading.Lock(), threading.Condition()
-        self._pending: Optional[Tuple[int, bytes, Tuple[str, ...], str]] = None
+        self._pending: Optional[Tuple[int, bytes, Tuple[str, ...]]] = None
         self._submitted_count = self._completed_count = 0
         self._closed, self._error, self._thought_count = False, None, 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -71,7 +70,7 @@ class Thinker:
         with self._condition:
             self._submitted_count += 1
             request_id = self._submitted_count
-            self._pending = (request_id, image_bytes, actions, directive)
+            self._pending = (request_id, image_bytes, actions)
             self._condition.notify()
             if wait_for_completion:
                 while self._completed_count < request_id and not self._closed:
@@ -100,10 +99,9 @@ class Thinker:
                     self._condition.wait()
                 if self._closed:
                     return
-                request_id, image_bytes, actions, prior = self._pending
+                request_id, image_bytes, actions = self._pending
                 self._pending = None
             try:
-                retrieved = self.rag.search(f"{self.goal} {prior}")
                 with self._lock:
                     tracker = self._subtask_tracker
                 if tracker is None:
@@ -111,13 +109,13 @@ class Thinker:
                     if self.show_output:
                         print(f"[ModelA subtasks] {tracker}", flush=True)
                 else:
-                    tracker = self._update_completion_status(tracker, actions, retrieved, image_bytes)
+                    tracker = self._update_completion_status(tracker, actions, image_bytes)
                     if self.show_output:
                         print(f"[ModelA completion status] {tracker}", flush=True)
                 with self._lock:
                     self.task_memory.update_subgoal_status(tracker)
                     memory_context = self.task_memory.context()
-                directive = self.short_term.analyze(image_bytes, memory_context, actions, retrieved)
+                directive = self._infer_directive(image_bytes, memory_context, actions)
                 self._thought_count += 1
                 with self._lock:
                     self._subtask_tracker, self._directive, self._error = tracker, directive, None
@@ -126,7 +124,7 @@ class Thinker:
                     self._completed_count = request_id
                     self._condition.notify_all()
                 if self.show_output:
-                    print(f"[ModelA short-term] {directive}", flush=True)
+                    print(f"[ModelA directive] {directive}", flush=True)
             except Exception as exc:
                 with self._lock:
                     self._error = exc
@@ -148,13 +146,12 @@ class Thinker:
             raise ValueError("Subtask planner returned an empty tracker.")
         return tracker
 
-    def _update_completion_status(self, tracker: str, actions: Tuple[str, ...], retrieved: List[str], image_bytes: bytes) -> str:
+    def _update_completion_status(self, tracker: str, actions: Tuple[str, ...], image_bytes: bytes) -> str:
         """Update statuses without allowing the model to re-plan the task."""
         prompt = (
             f"Task memory:\n{self.task_memory.context()}\n"
             f"Existing subtask tracker:\n{tracker}\n"
             f"Recent actions: {list(actions)}\n"
-            f"Retrieved knowledge: {list(retrieved)}\n"
             "Update only the Completion status fields."
         )
         updated_tracker = self._llm(
@@ -166,3 +163,20 @@ class Thinker:
         if not updated_tracker:
             raise ValueError("Completion-status updater returned an empty tracker.")
         return updated_tracker
+
+    def _infer_directive(self, image_bytes: bytes, memory_context: str, actions: Tuple[str, ...]) -> str:
+        """Turn the current observation and task memory into ModelB's next directive."""
+        prompt = (
+            f"Task memory:\n{memory_context}\n"
+            f"Recent actions: {list(actions)}\n"
+            "Analyze the current RGB observation and issue ModelB's next directive."
+        )
+        directive = self._llm(
+            [prompt, image_bytes],
+            system_prompt=DIRECTIVE_PROMPT,
+            max_tokens=96,
+            temperature=0,
+        ).strip()
+        if not directive:
+            raise ValueError("Thinker returned an empty directive.")
+        return directive

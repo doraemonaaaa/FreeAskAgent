@@ -12,10 +12,10 @@ VLNAgent = Actor
 class AsyncThinkActVLN:
     """Run ModelA thinking before ModelB selects each action."""
 
-    def __init__(self, goal: str, *, policy_model_path="models/Qwen3-VL-8B-Instruct", planner_model_path="models/Qwen3-VL-8B-Instruct", debug_performance=False, use_cache=False, long_term_interval=8, rag_path=None):
+    def __init__(self, goal: str, *, policy_model_path="models/Qwen3-VL-8B-Instruct", planner_model_path="models/Qwen3-VL-8B-Instruct", debug_performance=False, use_cache=False):
         self.goal = goal
         self.actor = Actor(policy_model_path, debug_performance=debug_performance, use_cache=use_cache)
-        self.thinker = Thinker(goal, self.actor, planner_model_path=planner_model_path, debug_performance=debug_performance, use_cache=use_cache, long_term_interval=long_term_interval, rag_path=rag_path)
+        self.thinker = Thinker(goal, self.actor, planner_model_path=planner_model_path, debug_performance=debug_performance, use_cache=use_cache)
         # The task memory starts with this agent's input: (goal, current observation).
         self.task_memory = self.thinker.task_memory
 
@@ -65,8 +65,6 @@ def parse_args():
     parser.add_argument("--model-path", default="models/Qwen3-VL-8B-Instruct")
     parser.add_argument("--planner-model-path", default="models/Qwen3-VL-8B-Instruct")
     parser.add_argument("--goal", default="Navigate safely to the requested destination.")
-    parser.add_argument("--long-term-interval", type=int, default=8)
-    parser.add_argument("--rag-path", help="JSON list of navigation knowledge documents.")
     parser.add_argument("--single-model", action="store_true", help="Disable ModelA and run ModelB alone.")
     parser.add_argument("--no-debug-performance", action="store_true")
     parser.add_argument("--use-cache", action="store_true")
@@ -78,7 +76,7 @@ def main():
     if args.single_model:
         agent = Actor(args.model_path, debug_performance=not args.no_debug_performance, use_cache=args.use_cache)
     else:
-        agent = AsyncThinkActVLN(goal=args.goal, policy_model_path=args.model_path, planner_model_path=args.planner_model_path, debug_performance=not args.no_debug_performance, use_cache=args.use_cache, long_term_interval=args.long_term_interval, rag_path=args.rag_path)
+        agent = AsyncThinkActVLN(goal=args.goal, policy_model_path=args.model_path, planner_model_path=args.planner_model_path, debug_performance=not args.no_debug_performance, use_cache=args.use_cache)
     run_terminal(agent)
 
 
