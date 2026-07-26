@@ -2,9 +2,11 @@ import hashlib
 import io
 import json
 import os
+import tempfile
 import time
+from dataclasses import dataclass
 from threading import Thread
-from typing import List, Union
+from typing import List, Optional, Union
 
 import platformdirs
 import torch
@@ -19,6 +21,83 @@ except ImportError as exc:
     ) from exc
 
 from .base import CachedEngine, EngineLM
+
+
+@dataclass
+class VideoInput:
+    """Represents a video to be understood by the model.
+
+    Exactly one of `path` or `data` must be provided.
+
+    Attributes:
+        path: Filesystem path (or URL, if the processor/backend supports it)
+            pointing to the video file. Preferred over `data` for large files
+            since it avoids buffering the whole video in memory and enables
+            stable caching based on file identity rather than content hash.
+        data: Raw video bytes (e.g. mp4/webm/mov). Will be written to a
+            temporary file before being handed to the processor, since the
+            underlying Qwen3-VL video pipeline (decord/torchvision/opencv,
+            depending on what's installed) expects a path-like input.
+        fps: Frames per second to sample from the video. Lower values reduce
+            token usage / memory at the cost of temporal resolution. Qwen3-VL
+            processors accept this directly and perform the sampling
+            internally.
+        max_frames: Optional hard cap on the number of sampled frames,
+            regardless of `fps` and video duration. Useful to bound
+            memory/token usage for long videos.
+        max_pixels: Optional per-frame pixel budget forwarded to the
+            processor's image/video resizing logic (same semantics as
+            Qwen-VL's `max_pixels`), to control token cost per frame.
+        with_timestamps: If True, frames are extracted manually (via OpenCV)
+            and interleaved with explicit "t=X.Xs" text markers before each
+            frame, instead of handing the raw video to the processor's
+            built-in video pipeline. This trades a bit of setup cost for
+            reliable, version-independent temporal grounding: the model sees
+            exactly which second each frame came from, which noticeably
+            improves answers to questions like "what happens around the
+            10s mark" or "what happened first, X or Y". Requires
+            `opencv-python` to be installed.
+    """
+
+    path: Optional[str] = None
+    data: Optional[bytes] = None
+    fps: float = 2.0
+    max_frames: Optional[int] = None
+    max_pixels: Optional[int] = None
+    with_timestamps: bool = False
+
+    def __post_init__(self):
+        if (self.path is None) == (self.data is None):
+            raise ValueError("VideoInput requires exactly one of `path` or `data`.")
+
+    def resolve_path(self, tmp_dir: str) -> str:
+        """Returns a filesystem path for this video, materializing `data` to disk if needed."""
+        if self.path is not None:
+            return self.path
+
+        # Write raw bytes out to a temp file so the video backend (decord/
+        # torchvision/opencv/qwen-vl-utils) can open it like any other file.
+        digest = hashlib.sha256(self.data).hexdigest()[:16]
+        tmp_path = os.path.join(tmp_dir, f"video_{digest}.mp4")
+        if not os.path.exists(tmp_path):
+            with open(tmp_path, "wb") as f:
+                f.write(self.data)
+        return tmp_path
+
+    def cache_fingerprint(self) -> str:
+        """A stable fingerprint used for cache-key hashing (cheap for path inputs)."""
+        if self.path is not None:
+            try:
+                stat = os.stat(self.path)
+                identity = f"{os.path.abspath(self.path)}:{stat.st_size}:{stat.st_mtime_ns}"
+            except OSError:
+                identity = os.path.abspath(self.path)
+        else:
+            identity = hashlib.sha256(self.data).hexdigest()
+        return (
+            f"{identity}:{self.fps}:{self.max_frames}:{self.max_pixels}:"
+            f"{self.with_timestamps}"
+        )
 
 
 class LocalQwen3VL(EngineLM, CachedEngine):
@@ -47,6 +126,13 @@ class LocalQwen3VL(EngineLM, CachedEngine):
         self.is_multimodal = is_multimodal
         self.debug_performance = debug_performance
 
+        # Temp dir used to materialize raw video bytes (VideoInput.data) to disk,
+        # since the video decoding backends expect a path rather than bytes.
+        self._video_tmp_dir = os.path.join(
+            tempfile.gettempdir(), "agentflow_qwen3vl_video_cache"
+        )
+        os.makedirs(self._video_tmp_dir, exist_ok=True)
+
         if self.use_cache:
             root = platformdirs.user_cache_dir("agentflow")
             cache_name = hashlib.sha256(self.model_path.encode()).hexdigest()[:16]
@@ -64,7 +150,7 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             trust_remote_code=trust_remote_code,
         )
 
-    def generate(self, content: Union[str, List[Union[str, bytes]]], system_prompt=None, **kwargs):
+    def generate(self, content: Union[str, List[Union[str, bytes, VideoInput]]], system_prompt=None, **kwargs):
         if isinstance(content, str):
             return self._generate(content, system_prompt=system_prompt, **kwargs)
 
@@ -72,7 +158,8 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             if all(isinstance(item, str) for item in content):
                 return self._generate("\n".join(content), system_prompt=system_prompt, **kwargs)
 
-            if any(isinstance(item, bytes) for item in content):
+            has_media = any(isinstance(item, (bytes, VideoInput)) for item in content)
+            if has_media:
                 if not self.is_multimodal:
                     raise NotImplementedError(
                         f"Multimodal generation is disabled for {self.model_string}. "
@@ -80,14 +167,16 @@ class LocalQwen3VL(EngineLM, CachedEngine):
                     )
                 return self._generate(content, system_prompt=system_prompt, **kwargs)
 
-        raise ValueError("Unsupported content: expected str or list containing str/bytes.")
+        raise ValueError(
+            "Unsupported content: expected str or list containing str/bytes/VideoInput."
+        )
 
     def __call__(self, prompt, **kwargs):
         return self.generate(prompt, **kwargs)
 
     def _generate(
         self,
-        content: Union[str, List[Union[str, bytes]]],
+        content: Union[str, List[Union[str, bytes, VideoInput]]],
         system_prompt=None,
         temperature=0,
         max_tokens=2048,
@@ -214,6 +303,64 @@ class LocalQwen3VL(EngineLM, CachedEngine):
 
         return response_text
 
+    def _extract_frames_with_timestamps(self, video_path, fps, max_frames=None, max_pixels=None):
+        """Samples frames from `video_path` at roughly `fps`, returning a list of
+        (timestamp_seconds, PIL.Image) tuples in chronological order.
+
+        This bypasses the processor's built-in video pipeline so that we can
+        attach an explicit, human-readable timestamp to every frame -- this
+        is what lets the model reason precisely about "what happened when"
+        rather than only "what came before/after what".
+        """
+        try:
+            import cv2
+        except ImportError as exc:
+            raise ImportError(
+                "VideoInput(with_timestamps=True) requires opencv-python. "
+                "Install it with `pip install opencv-python`."
+            ) from exc
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+
+        try:
+            native_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if native_fps <= 0 or total_frames <= 0:
+                raise ValueError(f"Could not read video metadata for: {video_path}")
+
+            duration = total_frames / native_fps
+            sample_stride = max(int(round(native_fps / fps)), 1) if fps > 0 else 1
+
+            frames = []
+            frame_index = 0
+            while True:
+                ok = cap.grab()
+                if not ok:
+                    break
+                if frame_index % sample_stride == 0:
+                    ok, frame_bgr = cap.retrieve()
+                    if not ok:
+                        break
+                    timestamp = frame_index / native_fps
+                    image = Image.fromarray(frame_bgr[:, :, ::-1])  # BGR -> RGB
+                    if max_pixels is not None and image.width * image.height > max_pixels:
+                        scale = (max_pixels / (image.width * image.height)) ** 0.5
+                        new_size = (max(int(image.width * scale), 1), max(int(image.height * scale), 1))
+                        image = image.resize(new_size)
+                    frames.append((timestamp, image))
+                    if max_frames is not None and len(frames) >= max_frames:
+                        break
+                frame_index += 1
+        finally:
+            cap.release()
+
+        if not frames:
+            raise ValueError(f"No frames could be sampled from video: {video_path}")
+
+        return frames, duration
+
     def _build_messages(self, content, system_prompt, response_format=None):
         user_content = []
         if isinstance(content, str):
@@ -222,6 +369,35 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             for item in content:
                 if isinstance(item, str):
                     user_content.append({"type": "text", "text": item})
+                elif isinstance(item, VideoInput):
+                    video_path = item.resolve_path(self._video_tmp_dir)
+                    if item.with_timestamps:
+                        frames, duration = self._extract_frames_with_timestamps(
+                            video_path,
+                            fps=item.fps,
+                            max_frames=item.max_frames,
+                            max_pixels=item.max_pixels,
+                        )
+                        user_content.append(
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"[The following {len(frames)} frames are sampled from a "
+                                    f"{duration:.1f}s video, in chronological order. Each frame "
+                                    "is preceded by its timestamp in seconds.]"
+                                ),
+                            }
+                        )
+                        for timestamp, frame in frames:
+                            user_content.append({"type": "text", "text": f"t={timestamp:.2f}s"})
+                            user_content.append({"type": "image", "image": frame})
+                    else:
+                        video_block = {"type": "video", "video": video_path, "fps": item.fps}
+                        if item.max_frames is not None:
+                            video_block["max_frames"] = item.max_frames
+                        if item.max_pixels is not None:
+                            video_block["max_pixels"] = item.max_pixels
+                        user_content.append(video_block)
                 elif isinstance(item, bytes):
                     image = Image.open(io.BytesIO(item)).convert("RGB")
                     user_content.append({"type": "image", "image": image})
@@ -264,6 +440,8 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             for item in content:
                 if isinstance(item, str):
                     hasher.update(item.encode("utf-8"))
+                elif isinstance(item, VideoInput):
+                    hasher.update(item.cache_fingerprint().encode("utf-8"))
                 elif isinstance(item, bytes):
                     hasher.update(hashlib.sha256(item).digest())
                 else:

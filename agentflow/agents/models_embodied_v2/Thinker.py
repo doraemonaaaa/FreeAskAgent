@@ -6,8 +6,9 @@ from typing import Any, Deque, List, Optional, Tuple
 
 from agentflow.agents.engine.factory import create_llm_engine
 from .Actor import Actor, DEFAULT_MODEL_PATH
-from .rag import NavigationRAG
-from .short_term import ShortTermThinker
+from .memory import TaskMemory
+from .memory.rag import NavigationRAG
+from .memory.short_term import ShortTermThinker
 
 
 SUBTASK_DECOMPOSITION_PROMPT = """You are the task planner for a visual navigation robot.
@@ -40,10 +41,12 @@ class Thinker:
         llm = create_llm_engine(model_string=f"local-qwen3vl-{planner_model_path}", is_multimodal=True, use_cache=use_cache, debug_performance=debug_performance)
         self.rag = NavigationRAG(documents=rag_documents, path=rag_path)
         self._llm, self.short_term = llm, ShortTermThinker(llm)
+        self.task_memory = TaskMemory(goal)
         self._subtask_tracker: Optional[str] = None
         self._directive, self._actions = bootstrap_instruction or goal, deque(maxlen=8)
         self._lock, self._condition = threading.Lock(), threading.Condition()
-        self._pending: Optional[Tuple[bytes, Tuple[str, ...], str]] = None
+        self._pending: Optional[Tuple[int, bytes, Tuple[str, ...], str]] = None
+        self._submitted_count = self._completed_count = 0
         self._closed, self._error, self._thought_count = False, None, 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -59,18 +62,30 @@ class Thinker:
         with self._lock:
             return self._subtask_tracker
 
-    def submit_observation(self, rgb_image: Any) -> str:
+    def submit_observation(self, rgb_image: Any, *, wait_for_completion: bool = False) -> str:
+        """Submit an observation and optionally wait for its updated directive."""
         image_bytes = self.actor.rgb_to_bytes(rgb_image)
         with self._lock:
             directive, actions = self._directive, tuple(self._actions)
+            self.task_memory.record_input(rgb_image)
         with self._condition:
-            self._pending = (image_bytes, actions, directive)
+            self._submitted_count += 1
+            request_id = self._submitted_count
+            self._pending = (request_id, image_bytes, actions, directive)
             self._condition.notify()
+            if wait_for_completion:
+                while self._completed_count < request_id and not self._closed:
+                    self._condition.wait()
+                if self._error is not None:
+                    raise RuntimeError("Thinker failed to process the observation.") from self._error
+                with self._lock:
+                    return self._directive
         return directive
 
     def record_action(self, action: str) -> None:
         with self._lock:
             self._actions.append(action)
+            self.task_memory.record_event("Actor action", action)
 
     def close(self, timeout: Optional[float] = None) -> None:
         with self._condition:
@@ -85,7 +100,7 @@ class Thinker:
                     self._condition.wait()
                 if self._closed:
                     return
-                image_bytes, actions, prior = self._pending
+                request_id, image_bytes, actions, prior = self._pending
                 self._pending = None
             try:
                 retrieved = self.rag.search(f"{self.goal} {prior}")
@@ -99,15 +114,25 @@ class Thinker:
                     tracker = self._update_completion_status(tracker, actions, retrieved, image_bytes)
                     if self.show_output:
                         print(f"[ModelA completion status] {tracker}", flush=True)
-                directive = self.short_term.analyze(image_bytes, tracker, actions, retrieved)
+                with self._lock:
+                    self.task_memory.update_subgoal_status(tracker)
+                    memory_context = self.task_memory.context()
+                directive = self.short_term.analyze(image_bytes, memory_context, actions, retrieved)
                 self._thought_count += 1
                 with self._lock:
                     self._subtask_tracker, self._directive, self._error = tracker, directive, None
+                    self.task_memory.record_event("Thinker directive", directive)
+                with self._condition:
+                    self._completed_count = request_id
+                    self._condition.notify_all()
                 if self.show_output:
                     print(f"[ModelA short-term] {directive}", flush=True)
             except Exception as exc:
                 with self._lock:
                     self._error = exc
+                with self._condition:
+                    self._completed_count = request_id
+                    self._condition.notify_all()
                 if self.show_output:
                     print(f"[ModelA thinker error] {exc}", flush=True)
 
@@ -126,7 +151,7 @@ class Thinker:
     def _update_completion_status(self, tracker: str, actions: Tuple[str, ...], retrieved: List[str], image_bytes: bytes) -> str:
         """Update statuses without allowing the model to re-plan the task."""
         prompt = (
-            f"Original task: {self.goal}\n"
+            f"Task memory:\n{self.task_memory.context()}\n"
             f"Existing subtask tracker:\n{tracker}\n"
             f"Recent actions: {list(actions)}\n"
             f"Retrieved knowledge: {list(retrieved)}\n"

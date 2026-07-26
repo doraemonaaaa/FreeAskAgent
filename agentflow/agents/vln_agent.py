@@ -10,16 +10,18 @@ VLNAgent = Actor
 
 
 class AsyncThinkActVLN:
-    """Compose ModelA Thinker and ModelB Actor without serializing inference."""
+    """Run ModelA thinking before ModelB selects each action."""
 
     def __init__(self, goal: str, *, policy_model_path="models/Qwen3-VL-8B-Instruct", planner_model_path="models/Qwen3-VL-8B-Instruct", debug_performance=False, use_cache=False, long_term_interval=8, rag_path=None):
         self.goal = goal
         self.actor = Actor(policy_model_path, debug_performance=debug_performance, use_cache=use_cache)
         self.thinker = Thinker(goal, self.actor, planner_model_path=planner_model_path, debug_performance=debug_performance, use_cache=use_cache, long_term_interval=long_term_interval, rag_path=rag_path)
+        # The task memory starts with this agent's input: (goal, current observation).
+        self.task_memory = self.thinker.task_memory
 
     def act(self, rgb_image):
-        # ModelA only receives the observation; ModelB immediately acts on its latest directive.
-        directive = self.thinker.submit_observation(rgb_image)
+        # Use the directive inferred from this observation, never the previous one.
+        directive = self.thinker.submit_observation(rgb_image, wait_for_completion=True)
         action = self.actor.act(rgb_image, directive)
         self.thinker.record_action(action)
         return action
