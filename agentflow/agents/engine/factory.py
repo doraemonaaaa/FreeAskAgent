@@ -173,6 +173,7 @@ def create_llm_engine(model_string: str, use_cache: bool = False, is_multimodal:
             "device_map": kwargs.get("device_map", "auto"),
             "trust_remote_code": kwargs.get("trust_remote_code", False),
             "debug_performance": kwargs.get("debug_performance", False),
+            "generation_use_cache": kwargs.get("generation_use_cache", True),
         }
         return LocalQwen3VL(**config)
 

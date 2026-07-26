@@ -103,6 +103,7 @@ class VideoInput:
 class LocalQwen3VL(EngineLM, CachedEngine):
     DEFAULT_SYSTEM_PROMPT = "You are a helpful, creative, and smart assistant."
     DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
+    supports_image_pixel_budget = True
 
     def __init__(
         self,
@@ -115,6 +116,7 @@ class LocalQwen3VL(EngineLM, CachedEngine):
         device_map="auto",
         trust_remote_code=False,
         debug_performance: bool = False,
+        generation_use_cache: bool = True,
         **kwargs,
     ):
         self.model_string = model_string or model_path or os.getenv(
@@ -125,6 +127,11 @@ class LocalQwen3VL(EngineLM, CachedEngine):
         self.system_prompt = system_prompt
         self.is_multimodal = is_multimodal
         self.debug_performance = debug_performance
+        # Some fine-tuned Qwen3-VL checkpoints retain their training-time
+        # ``use_cache=false`` config.  KV caching is required for practical
+        # autoregressive inference latency and is independent of AgentFlow's
+        # persistent response cache above.
+        self.generation_use_cache = bool(generation_use_cache)
 
         # Temp dir used to materialize raw video bytes (VideoInput.data) to disk,
         # since the video decoding backends expect a path rather than bytes.
@@ -182,6 +189,8 @@ class LocalQwen3VL(EngineLM, CachedEngine):
         max_tokens=2048,
         top_p=0.99,
         response_format=None,
+        image_min_pixels=None,
+        image_max_pixels=None,
         **kwargs,
     ):
         sys_prompt_arg = system_prompt if system_prompt else self.system_prompt
@@ -193,12 +202,17 @@ class LocalQwen3VL(EngineLM, CachedEngine):
                 return cache_or_none
 
         messages = self._build_messages(content, sys_prompt_arg, response_format)
+        processor_kwargs = self._image_processor_kwargs(
+            image_min_pixels=image_min_pixels,
+            image_max_pixels=image_max_pixels,
+        )
         inputs = self.processor.apply_chat_template(
             messages,
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
             return_tensors="pt",
+            processor_kwargs=processor_kwargs,
         )
         inputs = inputs.to(self.model.device)
 
@@ -207,6 +221,7 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             **inputs,
             "max_new_tokens": max_tokens,
             "do_sample": do_sample,
+            "use_cache": self.generation_use_cache,
         }
         if do_sample:
             generation_kwargs["temperature"] = temperature
@@ -426,6 +441,37 @@ class LocalQwen3VL(EngineLM, CachedEngine):
                 "content": user_content,
             },
         ]
+
+    @staticmethod
+    def _image_processor_kwargs(
+        *,
+        image_min_pixels=None,
+        image_max_pixels=None,
+    ):
+        """Build an opt-in per-call image-token budget.
+
+        Without this option Qwen keeps its native processor defaults, which is
+        important for Actor/Thinker image quality. Temporal Memory opts in so
+        its deliberately small storyboard frames are not upscaled to 256x256.
+        """
+        if image_min_pixels is None and image_max_pixels is None:
+            return {}
+        if image_min_pixels is None or image_max_pixels is None:
+            raise ValueError(
+                "image_min_pixels and image_max_pixels must be provided together"
+            )
+        minimum = int(image_min_pixels)
+        maximum = int(image_max_pixels)
+        if minimum <= 0 or maximum <= 0 or minimum > maximum:
+            raise ValueError(
+                "image pixel budget must satisfy 0 < min <= max"
+            )
+        return {
+            "images_kwargs": {
+                "min_pixels": minimum,
+                "max_pixels": maximum,
+            }
+        }
 
     def _cache_key(self, system_prompt, content, temperature, max_tokens, top_p):
         hasher = hashlib.sha256()

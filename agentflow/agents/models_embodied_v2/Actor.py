@@ -13,8 +13,22 @@ TURN_LEFT = "TURN_LEFT"
 TURN_RIGHT = "TURN_RIGHT"
 STOP = "STOP"
 ACTION_TOKENS = (FORWARD, TURN_LEFT, TURN_RIGHT, STOP)
+ACTION_ALIASES = {
+    "MOVE_FORWARD": FORWARD,
+    "MOVE_FORWARD_0.1_METERS": FORWARD,
+    "MOVE_FORWARD_0.25_METERS": FORWARD,
+    "TURN_LEFT_15_DEGREES": TURN_LEFT,
+    "TURN_RIGHT_15_DEGREES": TURN_RIGHT,
+}
 ACTOR_PROMPT = """Return exactly one token: FORWARD, TURN_LEFT, TURN_RIGHT, or STOP.
-Given an RGB image and navigation instruction, output no explanation."""
+Given an RGB image and navigation instruction, output no explanation.
+FORWARD advances only 0.25 m; TURN_LEFT/TURN_RIGHT turn only 15 degrees, so reaching
+a destination normally takes many steps. Only choose STOP once the robot is within
+about 2 meters of the destination named in the instruction -- the target should
+fill a large part of the frame with little open floor left in front of you.
+Seeing the destination appear in the image, even clearly, is NOT a reason to stop
+by itself if it still looks far away or small. If you are not sure you are close
+enough, choose FORWARD (or turn to face it) instead of STOP."""
 
 
 class Actor:
@@ -59,7 +73,15 @@ class Actor:
 
     @staticmethod
     def parse_action(response: str) -> str:
-        matches = re.findall(r"\b(?:FORWARD|TURN_LEFT|TURN_RIGHT|STOP)\b", response)
+        accepted = (*ACTION_TOKENS, *ACTION_ALIASES)
+        pattern = r"\b(?:" + "|".join(
+            sorted(
+                (re.escape(token) for token in accepted),
+                key=len,
+                reverse=True,
+            )
+        ) + r")\b"
+        matches = re.findall(pattern, response.upper())
         if len(matches) != 1:
             raise ValueError(f"ModelB returned invalid action {response!r}; expected one of {ACTION_TOKENS}.")
-        return matches[0]
+        return ACTION_ALIASES.get(matches[0], matches[0])
