@@ -5,9 +5,10 @@ import time
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from agentflow.agents.models_embodied_v2.Actor import ACTION_TOKENS, Actor
+from agentflow.agents.models_embodied_v2.Actor import ACTION_TOKENS, FORWARD, STOP, Actor
 from agentflow.agents.models_embodied_v2.TemporalCaptioner import TemporalCaptioner
 from agentflow.agents.models_embodied_v2.Thinker import Thinker
+from agentflow.agents.models_embodied_v2.stop_gate import StopDecision
 from agentflow.agents.models_embodied_v2.memory import (
     MEMORY_MODES,
     CompositeMemory,
@@ -44,14 +45,20 @@ class AsyncThinkActVLN:
         temporal_memory: Optional[TemporalMemory] = None,
         temporal_captioner: Optional[TemporalCaptioner] = None,
         episode_id: str = "episode-0",
+        arrival_radius_m: float = 2.0,
+        confirmations_required: int = 3,
+        min_steps_since_target_seen: int = 4,
+        show_output: bool = True,
     ):
         self.goal = goal
+        self.show_output = show_output
         self._episode_started_at = time.monotonic()
         self._episode_id = str(episode_id)
         self.actor = actor or Actor(
             policy_model_path,
             debug_performance=debug_performance,
             use_cache=use_cache,
+            show_output=show_output,
         )
         if memory_mode not in MEMORY_MODES:
             raise ValueError(
@@ -100,6 +107,10 @@ class AsyncThinkActVLN:
             debug_performance=debug_performance,
             use_cache=use_cache,
             memory=self.memory,
+            show_output=show_output,
+            arrival_radius_m=arrival_radius_m,
+            confirmations_required=confirmations_required,
+            min_steps_since_target_seen=min_steps_since_target_seen,
         )
         # A supplied Thinker must consume the same composite coordinator.
         self.thinker.memory = self.memory
@@ -173,10 +184,21 @@ class AsyncThinkActVLN:
             wait_for_completion=True,
             tracker_updated_callback=update_temporal_memory,
         )
+        decision = self.thinker.stop_decision
         recovery_action = self.memory.prepare_recovery_action()
         if recovery_action is None:
-            action = self.actor.act(rgb_image, directive)
+            # STOP is absent from the action space unless the gate cleared it,
+            # so an early stop is unrepresentable rather than just discouraged.
+            action = self.actor.act(
+                rgb_image,
+                directive,
+                context=self.thinker.actor_context(),
+                allowed_actions=self.thinker.allowed_actions(),
+            )
+            action = self._enforce_stop_gate(action, decision)
         else:
+            # Go Back primitives are movement-only by construction, so recovery
+            # can never smuggle a STOP past the gate.
             action = recovery_action
             self.memory.record_event(
                 "Go Back Action",
@@ -189,6 +211,25 @@ class AsyncThinkActVLN:
         if recovery_action is not None:
             self.memory.ack_recovery_action(action)
         return action
+
+    @property
+    def stop_decision(self) -> StopDecision:
+        """Whether the gate would permit STOP right now, and why."""
+        return self.thinker.stop_decision
+
+    @property
+    def tracker(self):
+        """The structured tracker backing the gate, or None before planning."""
+        return self.thinker.tracker
+
+    def _enforce_stop_gate(self, action: str, decision: StopDecision) -> str:
+        """Last line of defence if a masked STOP still comes back from ModelB."""
+        if action != STOP or decision.allowed:
+            return action
+        self.memory.record_event("Stop denied", decision.reason)
+        if self.show_output:
+            print(f"[StopGate denied STOP] {decision.reason}", flush=True)
+        return FORWARD
 
     def finish_episode(
         self,
@@ -323,6 +364,24 @@ def parse_args():
     )
     parser.add_argument("--goal", default="Navigate safely to the requested destination.")
     parser.add_argument("--single-model", action="store_true", help="Disable ModelA and run ModelB alone.")
+    parser.add_argument(
+        "--arrival-radius",
+        type=float,
+        default=2.0,
+        help="Meters within which the stop gate may clear STOP.",
+    )
+    parser.add_argument(
+        "--stop-confirmations",
+        type=int,
+        default=3,
+        help="Consecutive arrival confirmations before the final subtask completes.",
+    )
+    parser.add_argument(
+        "--stop-dwell-steps",
+        type=int,
+        default=4,
+        help="Steps required between first sighting the target and stopping.",
+    )
     parser.add_argument("--no-debug-performance", action="store_true")
     parser.add_argument("--use-cache", action="store_true")
     return parser.parse_args()
@@ -341,6 +400,9 @@ def main():
             memory_mode=args.memory_mode,
             debug_performance=not args.no_debug_performance,
             use_cache=args.use_cache,
+            arrival_radius_m=args.arrival_radius,
+            confirmations_required=args.stop_confirmations,
+            min_steps_since_target_seen=args.stop_dwell_steps,
         )
     run_terminal(agent)
 

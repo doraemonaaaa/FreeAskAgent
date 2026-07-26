@@ -4,57 +4,57 @@ import threading
 from typing import Any, Callable, Optional, Tuple
 
 from agentflow.agents.engine.factory import create_llm_engine
-from .Actor import Actor, DEFAULT_MODEL_PATH
+from .Actor import ACTION_TOKENS, MOVE_TOKENS, Actor, DEFAULT_MODEL_PATH
 from .memory import CompositeMemory
+from .memory.subtask_tracker import SubtaskTracker, coerce_distance, extract_json
+from .stop_gate import StopDecision, StopGate
 
 
-SUBTASK_DECOMPOSITION_PROMPT = """You are the task planner for a visual navigation robot.
-Given the original task, decompose it into an ordered, minimal list of observable
-navigation subtasks. For every subtask, include a `Completion status` initialized
-to `NOT STARTED`. The final subtask must describe arriving close to (within about
-2 meters of) the destination/landmark named in the instruction, e.g. "Approach and
-stop within 2 meters of the rug" -- not merely bringing the destination into view.
-Preserve the original task and use this exact structure:
-Original task: ...
-1. Subtask: ... | Completion status: NOT STARTED
-2. Subtask: ... | Completion status: NOT STARTED
-Do not provide action tokens or a next-action directive."""
+# These run once (decomposition) or every step (the rest), so anything the
+# tracker's invariants already reject is dead weight here. What stays is what no
+# invariant can repair: the shape of the reply and the quality of the distance.
+SUBTASK_DECOMPOSITION_PROMPT = """Task planner for a visual navigation robot.
+Split the task into an ordered, minimal list of observable subtasks. The last one
+must be the arrival step -- reaching the destination, not just seeing it.
+
+JSON only:
+{"target_phrase": "<the destination, 1-4 words, e.g. 'the rug'>",
+ "subtasks": [{"text": "<subtask 1>"}, {"text": "<subtask 2>"}]}"""
 
 
-COMPLETION_STATUS_PROMPT = """You maintain an existing visual-navigation subtask
-tracker. Do not create, remove, reorder, split, or rewrite subtasks. Using the
-current RGB observation and recent actions, update only each subtask's
-`Completion status` to `NOT STARTED`, `IN PROGRESS`, `COMPLETE`, or `BLOCKED`
-(with a short reason only when BLOCKED).
+COMPLETION_STATUS_PROMPT = """You update one entry of a visual-navigation subtask tracker.
+The active subtask's index is given to you; report on that one only.
 
-Strict rule for arrival/stop subtasks (e.g. "stop near the rug"): mark COMPLETE
-ONLY when the robot is close to that location, roughly within 2 meters -- the
-target should occupy a large portion of the frame with little floor space left
-between the robot and it. Merely seeing the target appear in the frame, even
-clearly, keeps the subtask IN PROGRESS. Judge distance conservatively: if you
-are unsure whether the robot is within 2 meters, keep the subtask IN PROGRESS
-rather than COMPLETE.
+JSON only:
+{"updates": [{"index": <active index>, "status": "<NOT_STARTED|IN_PROGRESS|COMPLETE|BLOCKED>",
+              "evidence": "<what in the image supports this>",
+              "distance_estimate_m": <meters to this subtask's target, or null>,
+              "blocked_reason": "<only when BLOCKED>"}]}
 
-Return the same tracker format. Do not provide action tokens or a next-action
-directive."""
+Estimate `distance_estimate_m` honestly; never shrink it to justify a status.
+A separate system applies the arrival threshold to your number."""
 
 
-DIRECTIVE_PROMPT = """You are the multimodal visual thinker for a navigation robot.
-Inspect the current RGB image and combine it with the task memory and recent actions.
-Report local progress, visible obstacles, and a precise next directive for ModelB.
+ARRIVAL_CHECK_PROMPT = """Range estimator for a navigation robot.
+
+JSON only:
+{"target_visible": <true|false>, "distance_m": <meters, or null if not visible>,
+ "reason": "<one short sentence>"}
+
+Estimate the straight-line distance from the camera to the named target. Scale
+references: doorway ~2 m tall, couch ~2 m wide, floor tile ~0.3 m. A target seen
+through a doorway or window lies beyond that opening -- report the full distance,
+not the distance to the opening. When torn between two values, report the larger."""
+
+
+DIRECTIVE_PROMPT = """Visual thinker for a navigation robot. From the image, task
+memory, and recent actions, output one concise directive for ModelB: which way to
+turn, what to move toward, what to avoid, and any blocking obstacle.
 ModelB can only move forward 0.25 m or turn left/right 15 degrees.
 
-Stopping rule: the robot must be within about 2 meters of the final destination
-before it may stop. Seeing the target object/area in the distance is NOT enough
-to justify stopping -- judge proximity from how large the target appears in frame
-and how much open floor remains between the robot and it. While the target is
-still small/far, issue directives that keep approaching it (e.g. "move forward
-toward the rug, it is still far ahead"). Only instruct ModelB to stop once the
-robot is close enough that a couple more forward steps would reach the target, or
-it is already adjacent to it. Never issue a stop directive on the same step the
-target first becomes visible unless it is already that close.
-
-Do not output an action token; output a concise directive."""
+A separate gate owns the stop decision and already knows the measured distance to
+the target. Never write "stop" unless the gate reported stopping is permitted.
+No action tokens."""
 
 
 class Thinker:
@@ -72,6 +72,9 @@ class Thinker:
         show_output: bool = True,
         memory: Optional[Any] = None,
         planner_engine: Optional[Any] = None,
+        arrival_radius_m: float = 2.0,
+        confirmations_required: int = 3,
+        min_steps_since_target_seen: int = 4,
     ):
         self.goal, self.actor, self.show_output = goal, actor, show_output
         self._llm = planner_engine or create_llm_engine(
@@ -87,7 +90,20 @@ class Thinker:
         )
         # Compatibility alias for older callers; this is the coordinator.
         self.task_memory = self.memory
-        self._subtask_tracker: Optional[str] = None
+        self.arrival_radius_m = arrival_radius_m
+        self.confirmations_required = confirmations_required
+        self.min_steps_since_target_seen = min_steps_since_target_seen
+        self.stop_gate = StopGate(
+            arrival_radius_m=arrival_radius_m,
+            min_steps_since_target_seen=min_steps_since_target_seen,
+        )
+        # The tracker is a structured object now; `subtask_tracker` still hands
+        # the memory layer the same rendered text it has always consumed.
+        self._subtask_tracker: Optional[SubtaskTracker] = None
+        self._stop_decision = StopDecision(
+            False, "the planner has not produced a subtask plan yet"
+        )
+        self._actor_context = f"Original goal: {goal}"
         self._directive = bootstrap_instruction or goal
         self._lock, self._condition = threading.Lock(), threading.Condition()
         self._pending: Optional[
@@ -110,9 +126,31 @@ class Thinker:
 
     @property
     def subtask_tracker(self) -> Optional[str]:
-        """The fixed subtask list with its latest completion statuses."""
+        """The fixed subtask list with its latest statuses, rendered as text."""
+        with self._lock:
+            tracker = self._subtask_tracker
+        return None if tracker is None else tracker.render()
+
+    @property
+    def tracker(self) -> Optional[SubtaskTracker]:
+        """The structured tracker; statuses only move under its own invariants."""
         with self._lock:
             return self._subtask_tracker
+
+    @property
+    def stop_decision(self) -> StopDecision:
+        """Whether STOP is legal right now, and why."""
+        with self._lock:
+            return self._stop_decision
+
+    def allowed_actions(self) -> Tuple[str, ...]:
+        """ModelB's action space this step, STOP masked out until it is earned."""
+        return ACTION_TOKENS if self.stop_decision.allowed else MOVE_TOKENS
+
+    def actor_context(self) -> str:
+        """Goal plus subtask progress, so ModelB never acts on a bare directive."""
+        with self._lock:
+            return self._actor_context
 
     @property
     def planner_engine(self) -> Any:
@@ -163,18 +201,30 @@ class Thinker:
                 record_event("Actor action", action)
 
     def update_tracker_only(self, rgb_image: Any) -> str:
-        """Update the tracker for a terminal frame without a new directive."""
+        """Update the tracker for a terminal frame without a new directive.
+
+        Terminal-only, so it runs after the worker thread has gone idle.
+        """
         image_bytes = self.actor.rgb_to_bytes(rgb_image)
         actions = self._recent_actions()
         with self._lock:
             tracker = self._subtask_tracker
-        tracker = self._updated_tracker(tracker, actions, image_bytes)
+        tracker, target_visible, distance = self._updated_tracker(
+            tracker,
+            actions,
+            image_bytes,
+        )
+        self.stop_gate.observe(target_visible=target_visible, distance_m=distance)
+        decision = self.stop_gate.evaluate(tracker)
+        rendered = tracker.render()
         update_status = getattr(self.memory, "update_subgoal_status", None)
         if callable(update_status):
-            update_status(tracker)
+            update_status(rendered)
         with self._lock:
             self._subtask_tracker = tracker
-        return tracker
+            self._stop_decision = decision
+            self._actor_context = self._build_actor_context(tracker, decision)
+        return rendered
 
     def reset(self, goal: str) -> None:
         """Reset episode-scoped planner state without reloading weights."""
@@ -182,11 +232,16 @@ class Thinker:
             self._pending = None
             self._completed_count = self._submitted_count
             self._condition.notify_all()
+        self.stop_gate.reset()
         with self._lock:
             self.goal = goal
             self._subtask_tracker = None
             self._directive = goal
             self._error = None
+            self._stop_decision = StopDecision(
+                False, "the planner has not produced a subtask plan yet"
+            )
+            self._actor_context = f"Original goal: {goal}"
 
     def close(self, timeout: Optional[float] = None) -> None:
         with self._condition:
@@ -209,32 +264,52 @@ class Thinker:
                 with self._lock:
                     tracker = self._subtask_tracker
                 was_uninitialized = tracker is None
-                tracker = self._updated_tracker(
+                tracker, target_visible, distance = self._updated_tracker(
                     tracker,
                     actions,
                     image_bytes,
                 )
+                rendered = tracker.render()
                 if self.show_output:
                     label = (
                         "subtasks"
                         if was_uninitialized
                         else "completion status"
                     )
-                    print(f"[ModelA {label}] {tracker}", flush=True)
+                    print(f"[ModelA {label}]\n{rendered}", flush=True)
+
+                # Arrival evidence accrues over time; the gate is the only place
+                # that turns it into permission to stop.
+                self.stop_gate.observe(
+                    target_visible=target_visible,
+                    distance_m=distance,
+                )
+                decision = self.stop_gate.evaluate(tracker)
+
                 update_status = getattr(
                     self.memory,
                     "update_subgoal_status",
                     None,
                 )
                 if callable(update_status):
-                    update_status(tracker)
+                    update_status(rendered)
                 if tracker_updated_callback is not None:
-                    tracker_updated_callback(tracker)
+                    tracker_updated_callback(rendered)
                 memory_context = self.memory.context()
-                directive = self._infer_directive(image_bytes, memory_context, actions)
+                directive = self._infer_directive(
+                    image_bytes,
+                    memory_context,
+                    actions,
+                    decision,
+                )
                 self._thought_count += 1
                 with self._lock:
                     self._subtask_tracker, self._directive, self._error = tracker, directive, None
+                    self._stop_decision = decision
+                    self._actor_context = self._build_actor_context(
+                        tracker,
+                        decision,
+                    )
                     record_event = getattr(
                         self.memory,
                         "record_event",
@@ -247,6 +322,8 @@ class Thinker:
                     self._condition.notify_all()
                 if self.show_output:
                     print(f"[ModelA directive] {directive}", flush=True)
+                    verdict = "ALLOWED" if decision.allowed else "DENIED"
+                    print(f"[StopGate] {verdict}: {decision.reason}", flush=True)
             except Exception as exc:
                 with self._lock:
                     self._error = exc
@@ -262,55 +339,142 @@ class Thinker:
             return ()
         return tuple(getter())
 
+    def _build_actor_context(
+        self,
+        tracker: SubtaskTracker,
+        decision: StopDecision,
+    ) -> str:
+        permission = (
+            "STOP is ALLOWED this step."
+            if decision.allowed
+            else f"STOP is NOT allowed this step ({decision.reason})."
+        )
+        return f"{tracker.render_for_actor()}\n{permission}"
+
     def _updated_tracker(
         self,
-        tracker: Optional[str],
+        tracker: Optional[SubtaskTracker],
         actions: Tuple[str, ...],
         image_bytes: bytes,
-    ) -> str:
+    ) -> Tuple[SubtaskTracker, bool, Optional[float]]:
+        """Return the tracker plus this step's arrival evidence."""
         if tracker is None:
-            return self._decompose_original_task()
-        return self._update_completion_status(
+            return self._decompose_original_task(), False, None
+        target_visible, distance = self._check_arrival(tracker, image_bytes)
+        self._update_completion_status(
             tracker,
             actions,
             image_bytes,
+            distance,
         )
+        return tracker, target_visible, distance
 
-    def _decompose_original_task(self) -> str:
+    def _decompose_original_task(self) -> SubtaskTracker:
         """Create the tracker once, using only the task supplied at construction."""
-        tracker = self._llm(
+        reply = self._llm(
             f"Original task: {self.goal}",
             system_prompt=SUBTASK_DECOMPOSITION_PROMPT,
-            max_tokens=240,
+            max_tokens=320,
             temperature=0,
         ).strip()
-        if not tracker:
+        if not reply:
             raise ValueError("Subtask planner returned an empty tracker.")
-        return tracker
+        return SubtaskTracker.from_plan(
+            self.goal,
+            reply,
+            arrival_radius_m=self.arrival_radius_m,
+            confirmations_required=self.confirmations_required,
+        )
 
-    def _update_completion_status(self, tracker: str, actions: Tuple[str, ...], image_bytes: bytes) -> str:
-        """Update statuses without allowing the model to re-plan the task."""
+    def _check_arrival(
+        self,
+        tracker: SubtaskTracker,
+        image_bytes: bytes,
+    ) -> Tuple[bool, Optional[float]]:
+        """Ask one narrow range question about the final target.
+
+        Kept separate from the status update on purpose: a call that only has to
+        estimate one distance is far more reliable than the same judgement buried
+        in a prompt that is also juggling statuses and evidence.
+        """
+        if not tracker.awaiting_arrival:
+            return False, None
+        prompt = (
+            f"Target: {tracker.target_phrase}\n"
+            "How far is the camera from this target right now?"
+        )
+        try:
+            payload = extract_json(
+                self._llm(
+                    [prompt, image_bytes],
+                    system_prompt=ARRIVAL_CHECK_PROMPT,
+                    max_tokens=128,
+                    temperature=0,
+                )
+            )
+        except ValueError as exc:
+            if self.show_output:
+                print(f"[ModelA arrival check unparsed] {exc}", flush=True)
+            return False, None
+        if not isinstance(payload, dict):
+            return False, None
+        visible = bool(payload.get("target_visible"))
+        distance = coerce_distance(payload.get("distance_m")) if visible else None
+        if self.show_output:
+            print(
+                f"[ModelA arrival check] visible={visible} distance={distance} "
+                f"reason={payload.get('reason', '')!r}",
+                flush=True,
+            )
+        return visible, distance
+
+    def _update_completion_status(
+        self,
+        tracker: SubtaskTracker,
+        actions: Tuple[str, ...],
+        image_bytes: bytes,
+        distance: Optional[float],
+    ) -> None:
+        """Collect a status proposal and let the tracker's invariants filter it."""
+        active = tracker.active_subtask
+        if active is None:
+            return
         prompt = (
             f"Task memory:\n{self.memory.context()}\n"
-            f"Existing subtask tracker:\n{tracker}\n"
+            f"Subtask tracker:\n{tracker.render()}\n"
             f"Recent actions: {list(actions)}\n"
-            "Update only the Completion status fields."
+            f"Active subtask index: {active.index}\n"
+            f"Active subtask text: {active.text}\n"
+            "Report the status of the active subtask only."
         )
-        updated_tracker = self._llm(
+        reply = self._llm(
             [prompt, image_bytes],
             system_prompt=COMPLETION_STATUS_PROMPT,
-            max_tokens=240,
+            max_tokens=320,
             temperature=0,
         ).strip()
-        if not updated_tracker:
-            raise ValueError("Completion-status updater returned an empty tracker.")
-        return updated_tracker
+        if not reply:
+            raise ValueError("Completion-status updater returned an empty reply.")
+        result = tracker.apply(reply, measured_distance_m=distance)
+        if self.show_output:
+            for rejection in result.rejections:
+                print(f"[ModelA tracker rejected] {rejection}", flush=True)
 
-    def _infer_directive(self, image_bytes: bytes, memory_context: str, actions: Tuple[str, ...]) -> str:
+    def _infer_directive(
+        self,
+        image_bytes: bytes,
+        memory_context: str,
+        actions: Tuple[str, ...],
+        decision: StopDecision,
+    ) -> str:
         """Turn the current observation and task memory into ModelB's next directive."""
+        permission = (
+            "permitted" if decision.allowed else f"NOT permitted ({decision.reason})"
+        )
         prompt = (
             f"Task memory:\n{memory_context}\n"
             f"Recent actions: {list(actions)}\n"
+            f"Stopping is currently {permission}.\n"
             "Analyze the current RGB observation and issue ModelB's next directive."
         )
         directive = self._llm(
