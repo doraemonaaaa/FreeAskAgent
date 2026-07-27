@@ -19,8 +19,8 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, Optional
 
-from .task_memory import TaskMemory
-from .temporal_memory import (
+from ..memory.task_memory import TaskMemory
+from ..memory.temporal_memory import (
     StepExecution,
     TemporalMemory,
     TemporalObservation,

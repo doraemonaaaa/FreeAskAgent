@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from agentflow.agents.models_embodied_v2.Actor import Actor
-from agentflow.agents.models_embodied_v2.Thinker import Thinker
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Actor import Actor
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Thinker import Thinker
 from agentflow.agents.models_embodied_v2.memory import (
     TaskMemory,
     TemporalMemory,

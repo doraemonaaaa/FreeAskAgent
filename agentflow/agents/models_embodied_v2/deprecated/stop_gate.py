@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .memory.subtask_tracker import SubtaskTracker
+from .subtask_tracker import SubtaskTracker
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-"""Memory components currently used by the standalone temporal experiment."""
+"""Task and temporal memory components for VLN agents."""
 
 from .task_memory import TaskInput, TaskMemory
 from .temporal_memory import (

@@ -6,15 +6,15 @@ from collections import deque
 from collections.abc import Mapping
 from typing import Any, Optional
 
-from agentflow.agents.models_embodied_v2.Actor import ACTION_TOKENS, FORWARD, STOP, Actor
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Actor import ACTION_TOKENS, FORWARD, STOP, Actor
 from agentflow.agents.models_embodied_v2.TemporalCaptioner import TemporalCaptioner
-from agentflow.agents.models_embodied_v2.Thinker import Thinker
-from agentflow.agents.models_embodied_v2.freespace_gate import (
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Thinker import Thinker
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.freespace_gate import (
     EscapeDirection,
     FreeSpaceDecision,
     FreeSpaceGate,
 )
-from agentflow.agents.models_embodied_v2.stop_gate import StopDecision
+from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.stop_gate import StopDecision
 from agentflow.agents.models_embodied_v2.memory import (
     MEMORY_MODES,
     CompositeMemory,

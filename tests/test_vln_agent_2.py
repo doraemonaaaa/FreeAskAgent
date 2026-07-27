@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from agentflow.agents.vln_agent_2 import Actor, CameraIntrinsics
+from agentflow.agents.vln_agent_2 import Actor, CameraIntrinsics, Subgoal
 
 
 class FakeEngine:
@@ -10,6 +10,14 @@ class FakeEngine:
 
     def __call__(self, content, **kwargs):
         return self.response
+
+
+class SequenceFakeEngine:
+    def __init__(self, *responses: str):
+        self.responses = list(responses)
+
+    def __call__(self, content, **kwargs):
+        return self.responses.pop(0)
 
 
 def _actor(response='{"stop": false, "u": 2, "v": 3}'):
@@ -82,3 +90,36 @@ def test_actor_requires_sensor_range_to_decode_normalized_depth():
             np.eye(4),
             normalized_depth=True,
         )
+
+
+def test_prepare_task_decomposes_and_stores_ordered_subgoals():
+    actor = Actor(
+        engine=SequenceFakeEngine(
+            '{"subgoals": ["Exit the room through the visible doorway.", "Reach and stop beside the sofa."]}'
+        )
+    )
+
+    subgoals = actor.prepare_task("Leave the room and go to the sofa.")
+
+    assert subgoals == (
+        Subgoal("Exit the room through the visible doorway."),
+        Subgoal("Reach and stop beside the sofa."),
+    )
+    assert actor.subgoals == list(subgoals)
+    assert actor.task_instruction == "Leave the room and go to the sofa."
+
+
+def test_prepare_task_rejects_invalid_subgoal_response_without_replacing_state():
+    actor = Actor(
+        engine=SequenceFakeEngine(
+            '{"subgoals": ["Move forward until the doorway is reached."]}',
+            '{"subgoals": [{"description": "Not a string."}]}',
+        )
+    )
+    actor.prepare_task("Go forward.")
+
+    with pytest.raises(ValueError, match="invalid subgoal JSON"):
+        actor.prepare_task("Turn left.")
+
+    assert actor.task_instruction == "Go forward."
+    assert actor.subgoals == [Subgoal("Move forward until the doorway is reached.")]

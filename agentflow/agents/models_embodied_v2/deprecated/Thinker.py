@@ -13,8 +13,8 @@ from .Actor import (
     DEFAULT_MODEL_PATH,
 )
 from .freespace_gate import EscapeDirection
-from .memory import CompositeMemory
-from .memory.subtask_tracker import SubtaskTracker, coerce_distance, extract_json
+from ..memory import CompositeMemory
+from .subtask_tracker import SubtaskTracker, coerce_distance, extract_json
 from .stop_gate import StopDecision, StopGate
 
 

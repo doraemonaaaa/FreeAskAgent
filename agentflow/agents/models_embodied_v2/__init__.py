@@ -1,21 +1,14 @@
-"""Standalone visual-navigation memory components.
-
-The full Agent integration is intentionally outside the current Captioner /
-TemporalMemory experiment.
-"""
+"""VLN temporal understanding and memory components."""
 
 from .TemporalCaptioner import (
     CaptionResult,
     ErrorMode,
-    StepUnderstanding,
     Subgoal,
-    SubgoalCompletionResult,
-    SubgoalStatus,
     TemporalAnalysisRequest,
     TemporalCaptioner,
     TemporalCaptionerConfig,
     TemporalStepInput,
-    VisualChange,
+    normalize_action,
 )
 from .memory import (
     MemoryStep,
@@ -31,10 +24,7 @@ __all__ = (
     "CaptionResult",
     "ErrorMode",
     "MemoryStep",
-    "StepUnderstanding",
     "Subgoal",
-    "SubgoalCompletionResult",
-    "SubgoalStatus",
     "TaskMemory",
     "TaskMemoryPort",
     "TemporalAnalysisRequest",
@@ -45,5 +35,5 @@ __all__ = (
     "TemporalMemory",
     "TemporalMemoryConfig",
     "TemporalStepInput",
-    "VisualChange",
+    "normalize_action",
 )

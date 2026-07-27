@@ -33,6 +33,21 @@ stairs, image borders, or the sky. Reply only with {\"stop\": false, \"u\":
 integer, \"v\": integer}. Pixel coordinates use u=column from the left and
 v=row from the top."""
 
+SUBGOAL_PROMPT = """You are an indoor navigation task planner. Decompose the
+given navigation instruction into a short, ordered sequence of subgoal
+descriptions. Reply only with JSON in this exact shape:
+{"subgoals": ["..."]}
+
+1. Preserve the instruction order and split it into the smallest visually
+   verifiable navigation stages.
+2. A commanded action is not completion evidence. Completion must be supported
+   by the post-action visual sequence.
+3. A turn subgoal is complete only when the agent reaches the named turn
+   landmark, turns in the required direction, and the post-turn view is aligned
+   with the next route.
+4. The final arrival subgoal requires reaching and stopping beside the
+   destination; merely seeing it at a distance is insufficient."""
+
 
 @dataclass(frozen=True)
 class CameraIntrinsics:
@@ -54,6 +69,13 @@ class CameraIntrinsics:
             cx=float(values[0, 2]),
             cy=float(values[1, 2]),
         )
+
+
+@dataclass(frozen=True)
+class Subgoal:
+    """One ordered, visually verifiable navigation-stage description."""
+
+    description: str
 
 
 @dataclass(frozen=True)
@@ -105,6 +127,39 @@ class Actor:
         self.patch_radius_px = patch_radius_px
         self.max_patch_depth_spread_m = max_patch_depth_spread_m
         self.last_model_response: Optional[str] = None
+        self.task_instruction: Optional[str] = None
+        self.subgoals: list[Subgoal] = []
+        self.last_subgoal_response: Optional[str] = None
+
+    def prepare_task(self, instruction: str) -> tuple[Subgoal, ...]:
+        """Initialize a task by decomposing its instruction and retaining subgoals.
+
+        Call this once before navigation starts. Calling it again replaces the
+        previously stored task and subgoals.
+        """
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise ValueError("instruction must be a non-empty string.")
+
+        normalized_instruction = instruction.strip()
+        response = self.llm(
+            [f"Navigation instruction: {normalized_instruction}"],
+            system_prompt=SUBGOAL_PROMPT,
+            max_tokens=512,
+            temperature=0,
+        )
+        self.last_subgoal_response = str(response)
+        try:
+            payload = self._extract_json_object(self.last_subgoal_response)
+            entries = payload["subgoals"]
+            if not isinstance(entries, list) or not entries:
+                raise ValueError("subgoals must be a non-empty list")
+            subgoals = [Subgoal(description=self._required_text(item)) for item in entries]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Actor returned invalid subgoal JSON: {response!r}") from exc
+
+        self.task_instruction = normalized_instruction
+        self.subgoals = subgoals
+        return tuple(self.subgoals)
 
     def act(
         self,
@@ -191,6 +246,26 @@ class Actor:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Actor returned invalid waypoint JSON: {response!r}") from exc
         return u, v
+
+    @staticmethod
+    def _extract_json_object(response: str) -> dict[str, Any]:
+        """Extract the first JSON object, allowing a surrounding Markdown fence."""
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"\{", response):
+            try:
+                value, _ = decoder.raw_decode(response[match.start():])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+        raise ValueError("response contains no JSON object")
+
+    @staticmethod
+    def _required_text(value: Any) -> str:
+        text = value
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("each subgoal must be a non-empty string")
+        return text.strip()
 
     def _nearest_walkable_pixel(
         self, depth_m: np.ndarray, requested_uv: tuple[int, int]
@@ -286,4 +361,11 @@ class Actor:
 
 VLNAgent = Actor
 
-__all__ = ["Actor", "CameraIntrinsics", "NavigationDecision", "NavigationPoint", "VLNAgent"]
+__all__ = [
+    "Actor",
+    "CameraIntrinsics",
+    "NavigationDecision",
+    "NavigationPoint",
+    "Subgoal",
+    "VLNAgent",
+]
