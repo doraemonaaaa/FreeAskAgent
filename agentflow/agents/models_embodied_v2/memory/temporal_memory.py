@@ -1,12 +1,11 @@
-"""Latest eight VLN actions, their resulting images, and temporal events."""
+"""Latest eight VLN observations and their temporal events."""
 
 from __future__ import annotations
 
 import copy
 from collections import deque
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Deque, Optional, Protocol
+from dataclasses import asdict, replace
+from typing import Any, Deque, Optional, Protocol, Sequence
 
 from ..TemporalCaptioner import (
     CaptionResult,
@@ -14,9 +13,13 @@ from ..TemporalCaptioner import (
     Subgoal,
     TemporalAnalysisRequest,
     TemporalCaptioner,
-    TemporalInputError,
-    TemporalStepInput,
-    normalize_action,
+    TemporalFrameInput,
+)
+from ..data_models import (
+    MemoryFrame,
+    TemporalEvent,
+    TemporalEventKind,
+    TemporalMemoryConfig,
 )
 
 
@@ -28,65 +31,29 @@ class TemporalStateError(TemporalMemoryError):
     pass
 
 
-class TemporalEventKind(str, Enum):
-    SUBGOAL_COMPLETED = "SUBGOAL_COMPLETED"
-    GO_BACK_TO_ACTION = "GO_BACK_TO_ACTION"
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalEvent:
-    """Minimal event passed to Task Memory."""
-
-    kind: TemporalEventKind
-    value: bool
-    subgoal_id: str
-    error_mode: ErrorMode = "NONE"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "kind": self.kind.value,
-            "value": self.value,
-            "subgoal_id": self.subgoal_id,
-            "error_mode": self.error_mode,
-        }
-
-
 class TaskMemoryPort(Protocol):
+    def reset(
+        self,
+        *,
+        goal: str,
+        task_guidance: str = "",
+        subgoals: Sequence[Any] = (),
+    ) -> None: ...
+
     def get_task(self) -> str: ...
 
     def get_current_subgoal(self) -> Optional[Subgoal]: ...
 
+    def get_latest_observation(self) -> Any: ...
+
+    def get_reset_generation(self) -> int: ...
+
     def publish_temporal_event(self, event: TemporalEvent) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryStep:
-    """One action paired with the image observed after execution."""
-
-    step_id: int
-    action: str
-    post_image: Any
-    subgoal_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalMemoryConfig:
-    window_size: int = 8
-    stationary_threshold: float = 0.02
-    revisit_threshold: float = 0.05
-
-    def __post_init__(self) -> None:
-        if self.window_size != 8:
-            raise ValueError("Temporal Memory uses a fixed eight-step window")
-        if not 0 < self.stationary_threshold < self.revisit_threshold < 1:
-            raise ValueError(
-                "visual thresholds must satisfy 0 < stationary < revisit < 1"
-            )
 
 
 def _image_copy(image: Any) -> Any:
     if image is None:
-        raise TemporalStateError("post_image must not be None")
+        raise TemporalStateError("image must not be None")
     if isinstance(image, bytes):
         return image
     copier = getattr(image, "copy", None)
@@ -94,7 +61,7 @@ def _image_copy(image: Any) -> Any:
 
 
 class TemporalMemory:
-    """Build one sliding eight-step request and publish its two event types."""
+    """Build one sliding eight-frame request and publish temporal events."""
 
     def __init__(
         self,
@@ -106,81 +73,132 @@ class TemporalMemory:
         self.captioner = captioner
         self.task_memory = task_memory
         self.config = config or TemporalMemoryConfig()
-        self._steps: Deque[MemoryStep] = deque(maxlen=8)
+        self._frames: Deque[MemoryFrame] = deque(maxlen=8)
         self._events: Deque[TemporalEvent] = deque()
         self._subgoal: Optional[Subgoal] = None
         self._latest_result: Optional[CaptionResult] = None
         self._last_error: Optional[str] = None
-        self._last_analyzed_step: Optional[int] = None
-        self._next_step_id = 1
-        self._latched_error_mode: ErrorMode = "NONE"
+        self._last_analyzed_frame: Optional[int] = None
+        self._next_frame_id = 1
+        self._last_consumed_observation_count: Optional[int] = None
+        self._task_reset_generation = -1
         self.reset()
 
     @property
     def current_subgoal(self) -> Optional[Subgoal]:
+        self._sync_task_state()
         return self._subgoal
 
     @property
     def latest_result(self) -> Optional[CaptionResult]:
+        self._sync_task_state()
         return self._latest_result
 
     @property
     def last_analysis_error(self) -> Optional[str]:
+        self._sync_task_state()
         return self._last_error
 
     def reset(self) -> None:
-        self._steps.clear()
+        self._frames.clear()
         self._events.clear()
         self._subgoal = self.task_memory.get_current_subgoal()
         self._latest_result = None
         self._last_error = None
-        self._last_analyzed_step = None
-        self._next_step_id = 1
-        self._latched_error_mode = "NONE"
+        self._last_analyzed_frame = None
+        self._next_frame_id = 1
+        self._last_consumed_observation_count = None
+        self._task_reset_generation = (
+            self.task_memory.get_reset_generation()
+        )
 
-    def append_step(self, action: str, post_image: Any) -> MemoryStep:
-        """Append only after the action's resulting observation is available."""
-        self._sync_subgoal()
+    def reset_episode(
+        self,
+        *,
+        goal: str,
+        task_guidance: str = "",
+        subgoals: Sequence[Any] = (),
+    ) -> None:
+        """Reset Task and Temporal Memory together for one new episode."""
+        self.task_memory.reset(
+            goal=goal,
+            task_guidance=task_guidance,
+            subgoals=subgoals,
+        )
+        self.reset()
+
+    def get_latest_observation(self) -> Any:
+        """Read the latest RGB observation from Task Memory."""
+        rgb = self.task_memory.get_latest_observation()
+        if rgb is None:
+            raise TemporalStateError("Task Memory has no RGB observation")
+        return rgb
+
+    def append_latest_observation(self) -> Optional[MemoryFrame]:
+        """Fetch one new RGB from Task Memory and append it to the window."""
+        # A new episode may reuse the same observation count as the previous
+        # one, so reset synchronization must happen before duplicate checking.
+        self._sync_task_state()
+        observation_count = getattr(
+            self.task_memory,
+            "observation_count",
+            None,
+        )
+        if (
+            observation_count is not None
+            and observation_count == self._last_consumed_observation_count
+        ):
+            return None
+
+        frame = self.append_observation(self.get_latest_observation())
+        self._last_consumed_observation_count = observation_count
+        return frame
+
+    def append_observation(self, image: Any) -> MemoryFrame:
+        """Append one RGB observation to the current subgoal's window."""
+        self._sync_task_state()
         if self._subgoal is None:
             raise TemporalStateError("current subgoal is not set")
-        try:
-            action = normalize_action(action)
-        except TemporalInputError as exc:
-            raise TemporalStateError(str(exc)) from exc
-        step = MemoryStep(
-            step_id=self._next_step_id,
-            action=action,
-            post_image=_image_copy(post_image),
+        frame = MemoryFrame(
+            frame_id=self._next_frame_id,
+            image=_image_copy(image),
             subgoal_id=self._subgoal.subgoal_id,
         )
-        self._steps.append(step)
-        self._next_step_id += 1
-        return step
+        self._frames.append(frame)
+        self._next_frame_id += 1
+        return frame
+
+    def update_from_task_memory(self) -> Optional[CaptionResult]:
+        """Consume the latest Task Memory RGB and analyze when eight are ready."""
+        if self.append_latest_observation() is None:
+            return None
+        return self.analyze_if_ready()
 
     def analyze_if_ready(self) -> Optional[CaptionResult]:
-        if len(self._steps) < 8:
+        self._sync_task_state()
+        if len(self._frames) < 8:
             return None
-        newest = self._steps[-1].step_id
-        if newest == self._last_analyzed_step:
+        newest = self._frames[-1].frame_id
+        if newest == self._last_analyzed_frame:
             return None
         try:
             return self.analyze()
         except Exception as exc:
-            self._last_analyzed_step = newest
+            self._last_analyzed_frame = newest
             self._last_error = f"{type(exc).__name__}: {exc}"
             return None
 
     def analyze(self) -> CaptionResult:
-        self._sync_subgoal()
+        self._sync_task_state()
         if self._subgoal is None:
             raise TemporalStateError("current subgoal is not set")
-        if len(self._steps) != 8:
-            raise TemporalStateError("exactly eight steps are required")
+        if len(self._frames) != 8:
+            raise TemporalStateError("exactly eight frames are required")
         request = TemporalAnalysisRequest(
             subgoal=self._subgoal,
-            steps=tuple(
-                TemporalStepInput(step.step_id, step.action, step.post_image)
-                for step in self._steps
+            frames=tuple(
+                TemporalFrameInput(frame.frame_id, frame.image)
+                for frame in self._frames
             ),
         )
         try:
@@ -188,130 +206,133 @@ class TemporalMemory:
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             raise
-        self._store(result)
-        return result
+        return self._store(result)
 
-    def recent_steps(self) -> tuple[MemoryStep, ...]:
-        return tuple(self._steps)
-
-    def recent_actions(self) -> tuple[str, ...]:
-        return tuple(step.action for step in self._steps)
+    def recent_frames(self) -> tuple[MemoryFrame, ...]:
+        self._sync_task_state()
+        return tuple(self._frames)
 
     def drain_events(self) -> tuple[TemporalEvent, ...]:
+        self._sync_task_state()
         events = tuple(self._events)
         self._events.clear()
         return events
 
     def context(self) -> str:
+        self._sync_task_state()
         return (
             self._latest_result.to_memory_text()
             if self._latest_result
-            else f"Temporal window: {len(self._steps)}/8 steps"
+            else f"Temporal window: {len(self._frames)}/8 frames"
         )
 
     def diagnostics(self, *, include_raw_response: bool = False) -> dict[str, Any]:
-        result = self._latest_result.model_dump() if self._latest_result else None
+        self._sync_task_state()
+        result = asdict(self._latest_result) if self._latest_result else None
         if result and not include_raw_response:
             result.pop("raw_response", None)
         return {
             "current_subgoal_id": self._subgoal.subgoal_id if self._subgoal else None,
-            "step_ids": [step.step_id for step in self._steps],
-            "actions": list(self.recent_actions()),
-            "active_error_mode": self._latched_error_mode,
+            "frame_ids": [frame.frame_id for frame in self._frames],
+            "active_error_mode": (
+                self._latest_result.error_mode
+                if self._latest_result and self._latest_result.error
+                else "NONE"
+            ),
             "last_analysis_error": self._last_error,
             "pending_events": [event.to_dict() for event in self._events],
             "latest_result": result,
         }
 
-    def _sync_subgoal(self) -> None:
+    def _sync_task_state(self) -> None:
+        generation = self.task_memory.get_reset_generation()
+        if generation != self._task_reset_generation:
+            self.reset()
+            return
+
         current = self.task_memory.get_current_subgoal()
         old_id = self._subgoal.subgoal_id if self._subgoal else None
         new_id = current.subgoal_id if current else None
         if old_id != new_id:
-            self._steps.clear()
+            self._frames.clear()
             self._latest_result = None
-            self._last_analyzed_step = None
-            self._latched_error_mode = "NONE"
+            self._last_analyzed_frame = None
         self._subgoal = current
 
-    def _store(self, result: CaptionResult) -> None:
+    def _store(self, result: CaptionResult) -> CaptionResult:
         assert self._subgoal is not None
         if result.subgoal_id != self._subgoal.subgoal_id:
             raise TemporalStateError("Captioner returned the wrong subgoal")
+
+        if not result.error:
+            rule_mode = self._detect_error_mode()
+            if rule_mode != "NONE":
+                result = replace(
+                    result,
+                    error=True,
+                    error_mode=rule_mode,
+                )
+
         self._latest_result = result
         self._last_error = None
-        self._last_analyzed_step = self._steps[-1].step_id
-        error_mode = "NONE" if result.completed else self._detect_error_mode()
+        self._last_analyzed_frame = self._frames[-1].frame_id
 
+        self._publish(
+            TemporalEvent(
+                kind=TemporalEventKind.ERROR,
+                value=result.error,
+                subgoal_id=result.subgoal_id,
+                error_mode=result.error_mode,
+            )
+        )
         self._publish(
             TemporalEvent(
                 kind=TemporalEventKind.SUBGOAL_COMPLETED,
                 value=result.completed,
                 subgoal_id=result.subgoal_id,
-                error_mode=error_mode,
+                error_mode=result.error_mode,
             )
         )
-        if result.completed:
-            self._latched_error_mode = "NONE"
-            return
-
-        if error_mode != "NONE" and error_mode != self._latched_error_mode:
-            self._publish(
-                TemporalEvent(
-                    kind=TemporalEventKind.GO_BACK_TO_ACTION,
-                    value=True,
-                    subgoal_id=result.subgoal_id,
-                    error_mode=error_mode,
-                )
-            )
-            self._latched_error_mode = error_mode
-        elif error_mode == "NONE":
-            self._latched_error_mode = "NONE"
+        return result
 
     def _detect_error_mode(self) -> ErrorMode:
-        """Classify repeated failures from actions and lightweight frame change."""
-        signatures = [_visual_signature(step.post_image) for step in self._steps]
-        actions = self.recent_actions()
+        """Detect cumulative errors from the visual sequence only."""
+        signatures = [_visual_signature(frame.image) for frame in self._frames]
         adjacent = [
             _visual_distance(signatures[index - 1], signatures[index])
             for index in range(1, 8)
         ]
-
-        stuck_forward = sum(
-            actions[index] == "FORWARD"
-            and adjacent[index - 1] <= self.config.stationary_threshold
-            for index in range(1, 8)
-        )
-        if stuck_forward >= 3:
-            return "WALL_STUCK"
-
-        opposite = {
-            ("TURN_LEFT", "TURN_RIGHT"),
-            ("TURN_RIGHT", "TURN_LEFT"),
-        }
-        retraced_turns = sum(
-            (actions[index - 1], actions[index]) in opposite
-            and _visual_distance(signatures[index - 2], signatures[index])
-            <= self.config.revisit_threshold
+        lag_two = [
+            _visual_distance(signatures[index - 2], signatures[index])
             for index in range(2, 8)
+        ]
+        moving_threshold = max(
+            self.config.stationary_threshold * 2,
+            0.04,
         )
-        if retraced_turns >= 2:
+
+        if (
+            sum(value >= moving_threshold for value in adjacent) >= 4
+            and sum(
+                value <= self.config.stationary_threshold
+                for value in lag_two
+            )
+            >= 4
+        ):
             return "TURN_OSCILLATION"
 
-        turn_indices = [
-            index
-            for index, action in enumerate(actions)
-            if action in {"TURN_LEFT", "TURN_RIGHT"}
-        ]
         revisited_view = any(
             later - earlier >= 3
             and _visual_distance(signatures[earlier], signatures[later])
             <= self.config.revisit_threshold
-            for earlier in turn_indices
-            for later in turn_indices
+            for earlier in range(8)
+            for later in range(earlier + 1, 8)
             if later > earlier
         )
-        if len(turn_indices) >= 6 and revisited_view:
+        if (
+            sum(value >= moving_threshold for value in adjacent) >= 5
+            and revisited_view
+        ):
             return "IN_PLACE_SPIN"
 
         stationary_transitions = sum(
@@ -359,7 +380,7 @@ def _visual_distance(first: Any, second: Any) -> float:
 
 
 __all__ = (
-    "MemoryStep",
+    "MemoryFrame",
     "TaskMemoryPort",
     "TemporalEvent",
     "TemporalEventKind",

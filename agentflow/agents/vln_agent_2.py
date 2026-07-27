@@ -15,13 +15,21 @@ from __future__ import annotations
 import io
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
 import numpy as np
 
 from agentflow.agents.engine.factory import create_llm_engine
+from agentflow.agents.models_embodied_v2.data_models import (
+    CameraIntrinsics,
+    NavigationDecision,
+    NavigationPoint,
+    Subgoal,
+)
+
+from models_embodied_v2.memory.temporal_memory import TemporalMemory
+from models_embodied_v2.memory.task_memory import TaskMemory
 
 DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
 
@@ -36,7 +44,7 @@ v=row from the top."""
 SUBGOAL_PROMPT = """You are an indoor navigation task planner. Decompose the
 given navigation instruction into a short, ordered sequence of subgoal
 descriptions. Reply only with JSON in this exact shape:
-{"subgoals": ["..."]}
+{"subgoals": [{"subgoal_id": "1", "description": "...", "completion_criteria": "..."}]}
 
 1. Preserve the instruction order and split it into the smallest visually
    verifiable navigation stages.
@@ -46,55 +54,9 @@ descriptions. Reply only with JSON in this exact shape:
    landmark, turns in the required direction, and the post-turn view is aligned
    with the next route.
 4. The final arrival subgoal requires reaching and stopping beside the
-   destination; merely seeing it at a distance is insufficient."""
-
-
-@dataclass(frozen=True)
-class CameraIntrinsics:
-    """Pinhole intrinsics for the RGB-D sensor in pixel units."""
-
-    fx: float
-    fy: float
-    cx: float
-    cy: float
-
-    @classmethod
-    def from_matrix(cls, matrix: Any) -> "CameraIntrinsics":
-        values = np.asarray(matrix, dtype=np.float64)
-        if values.shape != (3, 3):
-            raise ValueError("intrinsics must be a 3x3 pinhole camera matrix.")
-        return cls(
-            fx=float(values[0, 0]),
-            fy=float(values[1, 1]),
-            cx=float(values[0, 2]),
-            cy=float(values[1, 2]),
-        )
-
-
-@dataclass(frozen=True)
-class Subgoal:
-    """One ordered, visually verifiable navigation-stage description."""
-
-    description: str
-
-
-@dataclass(frozen=True)
-class NavigationPoint:
-    """A validated RGB-D pixel and its resulting Habitat world waypoint."""
-
-    pixel_uv: tuple[int, int]
-    depth_m: float
-    camera_xyz: tuple[float, float, float]
-    world_xyz: tuple[float, float, float]
-
-
-@dataclass(frozen=True)
-class NavigationDecision:
-    """The actor's terminal decision or its next validated navigation point."""
-
-    stop: bool
-    point: Optional[NavigationPoint] = None
-    raw_response: Optional[str] = None
+   destination; merely seeing it at a distance is insufficient.
+5. Give each subgoal a unique, ordered ID. For every subgoal, state concrete
+   visual completion evidence in completion_criteria."""
 
 
 class Actor:
@@ -111,6 +73,7 @@ class Actor:
         max_depth_m: float = 10.0,
         patch_radius_px: int = 3,
         max_patch_depth_spread_m: float = 0.35,
+
     ) -> None:
         if min_depth_m <= 0 or max_depth_m <= min_depth_m:
             raise ValueError("depth limits must satisfy 0 < min_depth_m < max_depth_m.")
@@ -153,13 +116,27 @@ class Actor:
             entries = payload["subgoals"]
             if not isinstance(entries, list) or not entries:
                 raise ValueError("subgoals must be a non-empty list")
-            subgoals = [Subgoal(description=self._required_text(item)) for item in entries]
+            subgoals = [
+                Subgoal(
+                    subgoal_id=self._required_text(item["subgoal_id"]),
+                    description=self._required_text(item["description"]),
+                    completion_criteria=self._required_text(item["completion_criteria"]),
+                )
+                for item in entries
+            ]
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(f"Actor returned invalid subgoal JSON: {response!r}") from exc
 
         self.task_instruction = normalized_instruction
         self.subgoals = subgoals
+
+        self.reset_memory(subgoals)
         return tuple(self.subgoals)
+
+    def reset_memory(self, subgoals):
+        cur_goal, cur_guidance = subgoals[0].
+        self.task_memory.reset(subgoals)
+        self.temporal_memory.reset()
 
     def act(
         self,

@@ -1,30 +1,36 @@
-"""VLN temporal understanding and memory components."""
+"""VLN temporal understanding, memory, and shared data models."""
 
-from .TemporalCaptioner import (
+from __future__ import annotations
+
+from importlib import import_module
+
+from .data_models import (
+    CameraIntrinsics,
     CaptionResult,
     ErrorMode,
+    MemoryFrame,
+    NavigationDecision,
+    NavigationPoint,
     Subgoal,
+    TaskInput,
     TemporalAnalysisRequest,
-    TemporalCaptioner,
     TemporalCaptionerConfig,
-    TemporalStepInput,
-    normalize_action,
-)
-from .memory import (
-    MemoryStep,
-    TaskMemory,
-    TaskMemoryPort,
     TemporalEvent,
     TemporalEventKind,
-    TemporalMemory,
+    TemporalFrameInput,
+    TemporalInputError,
     TemporalMemoryConfig,
 )
 
 __all__ = (
     "CaptionResult",
+    "CameraIntrinsics",
     "ErrorMode",
-    "MemoryStep",
+    "MemoryFrame",
+    "NavigationDecision",
+    "NavigationPoint",
     "Subgoal",
+    "TaskInput",
     "TaskMemory",
     "TaskMemoryPort",
     "TemporalAnalysisRequest",
@@ -34,6 +40,24 @@ __all__ = (
     "TemporalEventKind",
     "TemporalMemory",
     "TemporalMemoryConfig",
-    "TemporalStepInput",
-    "normalize_action",
+    "TemporalFrameInput",
+    "TemporalInputError",
 )
+
+_LAZY_EXPORTS = {
+    "TemporalCaptioner": (".TemporalCaptioner", "TemporalCaptioner"),
+    "TaskMemory": (".memory", "TaskMemory"),
+    "TaskMemoryPort": (".memory", "TaskMemoryPort"),
+    "TemporalMemory": (".memory", "TemporalMemory"),
+}
+
+
+def __getattr__(name: str):
+    """Load implementation modules only when their public classes are used."""
+    try:
+        module_name, attribute = _LAZY_EXPORTS[name]
+    except KeyError as exc:
+        raise AttributeError(name) from exc
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value

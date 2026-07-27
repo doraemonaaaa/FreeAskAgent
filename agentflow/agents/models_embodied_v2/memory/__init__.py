@@ -2,7 +2,7 @@
 
 from .task_memory import TaskInput, TaskMemory
 from .temporal_memory import (
-    MemoryStep,
+    MemoryFrame,
     TaskMemoryPort,
     TemporalEvent,
     TemporalEventKind,
@@ -13,7 +13,7 @@ from .temporal_memory import (
 )
 
 __all__ = (
-    "MemoryStep",
+    "MemoryFrame",
     "TaskInput",
     "TaskMemory",
     "TaskMemoryPort",

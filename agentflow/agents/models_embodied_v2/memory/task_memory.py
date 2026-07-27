@@ -4,15 +4,10 @@ from __future__ import annotations
 
 import hashlib
 from collections import deque
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Deque, Optional, Sequence
 
-
-@dataclass(frozen=True, slots=True)
-class TaskInput:
-    observation: Any
-    goal: str
+from ..data_models import Subgoal, TaskInput
 
 
 class TaskMemory:
@@ -29,6 +24,7 @@ class TaskMemory:
         self.max_events = int(max_events)
         if self.max_events < 1:
             raise ValueError("max_events must be positive")
+        self._reset_generation = 0
         self.reset(
             goal=goal,
             task_guidance=task_guidance,
@@ -57,9 +53,19 @@ class TaskMemory:
         self._subgoals: tuple[Any, ...] = ()
         self._current_subgoal_index = 0
         self.set_subgoals(subgoals)
+        self._reset_generation += 1
+
+    def get_latest_observation(self) -> Any | None:
+        if self.latest_input is None:
+            return None
+        return self.latest_input.observation
 
     def get_task(self) -> str:
         return self.goal
+
+    def get_reset_generation(self) -> int:
+        """Return a monotonically increasing episode-reset version."""
+        return self._reset_generation
 
     def get_task_guidance(self) -> str:
         return self.task_guidance
@@ -76,8 +82,6 @@ class TaskMemory:
         ``vln_agent_2`` with ``task`` and ``guidance`` fields are normalized
         here so the Actor does not need to know the memory schema.
         """
-        from ..TemporalCaptioner import Subgoal
-
         normalized = []
         for index, item in enumerate(subgoals, start=1):
             if isinstance(item, Subgoal):
@@ -123,8 +127,6 @@ class TaskMemory:
         if kind == "SUBGOAL_COMPLETED":
             state = "COMPLETE" if value else "IN_PROGRESS"
             self.subgoal_completion_status = f"Subgoal {subgoal_id}: {state}"
-            if payload["error_mode"] == "NONE":
-                self.temporal_status = ""
             self.record_event(kind, self.subgoal_completion_status)
             current = self.get_current_subgoal()
             if (
@@ -135,9 +137,9 @@ class TaskMemory:
                 self._current_subgoal_index += 1
             return
 
-        if kind == "GO_BACK_TO_ACTION" and value:
-            mode = payload["error_mode"]
-            self.temporal_status = f"GO_BACK_TO_ACTION requested: {mode}"
+        if kind == "ERROR":
+            mode = payload["error_mode"] if value else "NONE"
+            self.temporal_status = f"ERROR={value}; mode={mode}"
             self.record_event(kind, self.temporal_status)
             return
 
@@ -184,6 +186,7 @@ class TaskMemory:
         current = self.get_current_subgoal()
         return {
             "goal": self.goal,
+            "reset_generation": self._reset_generation,
             "observation_count": self.observation_count,
             "current_subgoal_id": (
                 current.subgoal_id if current is not None else None

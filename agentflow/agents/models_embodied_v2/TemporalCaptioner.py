@@ -5,27 +5,25 @@ from __future__ import annotations
 import io
 import json
 import time
-from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from .data_models import (
+    CaptionResult,
+    ErrorMode,
+    Subgoal,
+    TemporalAnalysisRequest,
+    TemporalCaptionerConfig,
+    TemporalFrameInput,
+    TemporalInputError,
+)
+
 
 DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
-ErrorMode = Literal[
-    "NONE",
-    "WALL_STUCK",
-    "TURN_OSCILLATION",
-    "IN_PLACE_SPIN",
-    "GET_NOWHERE",
-]
 
 
 class TemporalCaptionerError(RuntimeError):
-    pass
-
-
-class TemporalInputError(TemporalCaptionerError, ValueError):
     pass
 
 
@@ -37,100 +35,12 @@ class TemporalOutputError(TemporalCaptionerError, ValueError):
     pass
 
 
-def _text(value: Any, label: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise TemporalInputError(f"{label} must not be empty")
-    return text
-
-
-@dataclass(frozen=True, slots=True)
-class Subgoal:
-    subgoal_id: str
-    description: str
-    completion_criteria: str
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "subgoal_id", _text(self.subgoal_id, "subgoal_id"))
-        object.__setattr__(
-            self, "description", _text(self.description, "subgoal description")
-        )
-        object.__setattr__(
-            self,
-            "completion_criteria",
-            _text(self.completion_criteria, "subgoal completion criteria"),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalFrameInput:
-    """One ordered RGB observation; no action metadata is required."""
-
-    frame_id: int
-    image: Any = field(repr=False)
-
-    def __post_init__(self) -> None:
-        if isinstance(self.frame_id, bool) or not isinstance(self.frame_id, int) or self.frame_id < 1:
-            raise TemporalInputError("frame_id must be a positive integer")
-        if self.image is None:
-            raise TemporalInputError("image must not be None")
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalAnalysisRequest:
-    subgoal: Subgoal
-    frames: tuple[TemporalFrameInput, ...]
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.subgoal, Subgoal):
-            raise TemporalInputError("subgoal must be a Subgoal")
-        frames = tuple(self.frames)
-        object.__setattr__(self, "frames", frames)
-        if len(frames) != 8:
-            raise TemporalInputError("request requires exactly eight frames")
-        if any(not isinstance(frame, TemporalFrameInput) for frame in frames):
-            raise TemporalInputError("frames must contain TemporalFrameInput values")
-        ids = [frame.frame_id for frame in frames]
-        if ids != sorted(set(ids)):
-            raise TemporalInputError("frame IDs must be unique and increasing")
-
-
 class _ModelResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completed: bool
     error: bool
     error_mode: ErrorMode
-
-
-@dataclass(frozen=True, slots=True)
-class CaptionResult:
-    subgoal_id: str
-    completed: bool
-    error: bool
-    error_mode: ErrorMode
-    raw_response: str
-    latency_ms: float
-
-    def to_memory_text(self) -> str:
-        state = "complete" if self.completed else "in progress"
-        return (
-            f"Subgoal {self.subgoal_id}: {state}; "
-            f"error={self.error}; error_mode={self.error_mode}"
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class TemporalCaptionerConfig:
-    max_tokens: int = 48
-    max_image_edge: int = 224
-    temperature: float = 0.0
-
-    def __post_init__(self) -> None:
-        if self.max_tokens < 8:
-            raise ValueError("max_tokens must be at least 8")
-        if self.max_image_edge < 32:
-            raise ValueError("max_image_edge must be at least 32")
 
 
 SYSTEM_PROMPT = """Inspect eight ordered first-person navigation images.
