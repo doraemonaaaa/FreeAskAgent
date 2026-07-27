@@ -1,25 +1,21 @@
-"""Shared immutable data models for embodied navigation and temporal memory."""
+"""Shared typed values used by the VLN policy and its memory modules."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import numpy as np
 
 
 ErrorMode = Literal[
-    "NONE",
-    "WALL_STUCK",
-    "TURN_OSCILLATION",
-    "IN_PLACE_SPIN",
-    "GET_NOWHERE",
+    "NONE", "WALL_STUCK", "TURN_OSCILLATION", "IN_PLACE_SPIN", "GET_NOWHERE"
 ]
 
 
 class TemporalInputError(ValueError):
-    """Raised when a temporal data model receives invalid input."""
+    pass
 
 
 def _text(value: Any, label: str) -> str:
@@ -109,6 +105,13 @@ class TaskInput:
     goal: str
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryFrame:
+    frame_id: int
+    image: Any = field(repr=False)
+    subgoal_id: str = ""
+
+
 class TemporalEventKind(str, Enum):
     SUBGOAL_COMPLETED = "SUBGOAL_COMPLETED"
     ERROR = "ERROR"
@@ -122,31 +125,12 @@ class TemporalEvent:
     error_mode: ErrorMode = "NONE"
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind.value, "value": self.value, "subgoal_id": self.subgoal_id, "error_mode": self.error_mode}
-
-
-@dataclass(frozen=True, slots=True)
-class MemoryFrame:
-    """One RGB observation retained by Temporal Memory."""
-
-    frame_id: int
-    image: Any = field(repr=False)
-    subgoal_id: str
-
-    def __post_init__(self) -> None:
-        if (
-            isinstance(self.frame_id, bool)
-            or not isinstance(self.frame_id, int)
-            or self.frame_id < 1
-        ):
-            raise TemporalInputError("frame_id must be a positive integer")
-        if self.image is None:
-            raise TemporalInputError("image must not be None")
-        object.__setattr__(
-            self,
-            "subgoal_id",
-            _text(self.subgoal_id, "subgoal_id"),
-        )
+        return {
+            "kind": self.kind.value,
+            "value": self.value,
+            "subgoal_id": self.subgoal_id,
+            "error_mode": self.error_mode,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,24 +172,5 @@ class NavigationPoint:
 @dataclass(frozen=True, slots=True)
 class NavigationDecision:
     stop: bool
-    point: Optional[NavigationPoint] = None
-    raw_response: Optional[str] = None
-
-
-__all__ = (
-    "CameraIntrinsics",
-    "CaptionResult",
-    "ErrorMode",
-    "MemoryFrame",
-    "NavigationDecision",
-    "NavigationPoint",
-    "Subgoal",
-    "TaskInput",
-    "TemporalAnalysisRequest",
-    "TemporalCaptionerConfig",
-    "TemporalEvent",
-    "TemporalEventKind",
-    "TemporalFrameInput",
-    "TemporalInputError",
-    "TemporalMemoryConfig",
-)
+    point: NavigationPoint | None = None
+    raw_response: str | None = None

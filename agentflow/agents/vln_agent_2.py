@@ -27,9 +27,9 @@ from agentflow.agents.models_embodied_v2.data_models import (
     NavigationPoint,
     Subgoal,
 )
-
-from models_embodied_v2.memory.temporal_memory import TemporalMemory
-from models_embodied_v2.memory.task_memory import TaskMemory
+from agentflow.agents.models_embodied_v2.TemporalCaptioner import TemporalCaptioner
+from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import TemporalMemory
 
 DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
 
@@ -73,7 +73,8 @@ class Actor:
         max_depth_m: float = 10.0,
         patch_radius_px: int = 3,
         max_patch_depth_spread_m: float = 0.35,
-
+        task_memory: Optional[TaskMemory] = None,
+        temporal_memory: Optional[TemporalMemory] = None,
     ) -> None:
         if min_depth_m <= 0 or max_depth_m <= min_depth_m:
             raise ValueError("depth limits must satisfy 0 < min_depth_m < max_depth_m.")
@@ -93,6 +94,10 @@ class Actor:
         self.task_instruction: Optional[str] = None
         self.subgoals: list[Subgoal] = []
         self.last_subgoal_response: Optional[str] = None
+        self.task_memory = task_memory
+        if temporal_memory is not None and task_memory is None:
+            raise ValueError("temporal_memory requires its associated task_memory.")
+        self.temporal_memory = temporal_memory
 
     def prepare_task(self, instruction: str) -> tuple[Subgoal, ...]:
         """Initialize a task by decomposing its instruction and retaining subgoals.
@@ -130,13 +135,23 @@ class Actor:
         self.task_instruction = normalized_instruction
         self.subgoals = subgoals
 
-        self.reset_memory(subgoals)
+        self.reset_memory(normalized_instruction, subgoals)
         return tuple(self.subgoals)
 
-    def reset_memory(self, subgoals):
-        cur_goal, cur_guidance = subgoals[0].
-        self.task_memory.reset(subgoals)
-        self.temporal_memory.reset()
+    def reset_memory(self, instruction: str, subgoals: Sequence[Subgoal]) -> None:
+        """Initialize Task and Temporal Memory for the prepared episode."""
+        if self.task_memory is None:
+            self.task_memory = TaskMemory(instruction, subgoals=subgoals)
+        else:
+            self.task_memory.reset(goal=instruction, subgoals=subgoals)
+
+        if self.temporal_memory is None:
+            self.temporal_memory = TemporalMemory(
+                captioner=TemporalCaptioner(),
+                task_memory=self.task_memory,
+            )
+        else:
+            self.temporal_memory.reset()
 
     def act(
         self,
@@ -157,6 +172,10 @@ class Actor:
         provide that sensor's ``depth_min_m`` and ``depth_max_m`` bounds.
         """
         image = self._as_rgb_array(rgb)
+        if self.task_memory is not None:
+            self.task_memory.record_input(image)
+            if self.temporal_memory is not None:
+                self.temporal_memory.update_from_task_memory()
         depth_m = self._depth_in_meters(
             depth,
             image.shape[:2],
