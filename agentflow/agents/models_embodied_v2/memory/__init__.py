@@ -1,54 +1,26 @@
-"""Composable memory modules for the embodied visual-navigation agent."""
+"""Memory components currently used by the standalone temporal experiment."""
 
-from .interface import (
-    MEMORY_MODES,
-    CompositeMemory,
-    MemoryMode,
-    TaskMemoryInterface,
-    TemporalMemoryInterface,
-)
 from .task_memory import TaskInput, TaskMemory
 from .temporal_memory import (
-    ActionMatch,
-    CumulativeErrorMode,
-    CumulativeErrorPhase,
-    CumulativeErrorState,
-    ErrorVerdict,
-    GoBackRequest,
-    ProgressVerdict,
-    StepExecution,
-    TemporalEvidenceStep,
+    MemoryStep,
+    TaskMemoryPort,
+    TemporalEvent,
+    TemporalEventKind,
     TemporalMemory,
     TemporalMemoryConfig,
     TemporalMemoryError,
-    TemporalObservation,
-    TemporalRuleStatus,
     TemporalStateError,
-    TemporalStep,
 )
 
 __all__ = (
-    "ActionMatch",
-    "CompositeMemory",
-    "CumulativeErrorMode",
-    "CumulativeErrorPhase",
-    "CumulativeErrorState",
-    "ErrorVerdict",
-    "GoBackRequest",
-    "MEMORY_MODES",
-    "MemoryMode",
-    "ProgressVerdict",
-    "StepExecution",
+    "MemoryStep",
     "TaskInput",
     "TaskMemory",
-    "TaskMemoryInterface",
-    "TemporalEvidenceStep",
+    "TaskMemoryPort",
+    "TemporalEvent",
+    "TemporalEventKind",
     "TemporalMemory",
     "TemporalMemoryConfig",
     "TemporalMemoryError",
-    "TemporalMemoryInterface",
-    "TemporalObservation",
-    "TemporalRuleStatus",
     "TemporalStateError",
-    "TemporalStep",
 )

@@ -28,14 +28,29 @@ ACTOR_PROMPT_TEMPLATE = """Visual navigation action policy.
 Reply with exactly one token from this list, nothing else: {allowed}
 FORWARD moves 0.25 m; TURN_LEFT/TURN_RIGHT turn 15 degrees, so reaching a
 destination takes many steps.
-{stop_rule}"""
+Only pick FORWARD when the floor directly ahead is clear for the next 0.25 m.
+Seeing the target is not a path to it: if a wall or furniture stands between you
+and it, turn toward drivable floor -- a doorway, a corridor, a gap -- and go
+around.
+{stop_rule}{obstacle_rule}"""
 
 STOP_AVAILABLE_RULE = "Arrival is confirmed: pick STOP only if the image agrees you are there."
 
 STOP_MASKED_RULE = "Arrival is not confirmed, so STOP is unavailable this step; make progress instead."
 
+# FORWARD is masked out of `{allowed}` once the gate has evidence the last
+# FORWARD moved nothing, so driving into the wall again is unrepresentable.
+FORWARD_MASKED_RULE = (
+    "\nThe way straight ahead is blocked and FORWARD is unavailable this step: "
+    "turn toward the side showing open floor or a doorway."
+)
+
 # Kept for callers that still import the pre-masking prompt.
-ACTOR_PROMPT = ACTOR_PROMPT_TEMPLATE.format(allowed=", ".join(ACTION_TOKENS), stop_rule=STOP_AVAILABLE_RULE)
+ACTOR_PROMPT = ACTOR_PROMPT_TEMPLATE.format(
+    allowed=", ".join(ACTION_TOKENS),
+    stop_rule=STOP_AVAILABLE_RULE,
+    obstacle_rule="",
+)
 
 
 class Actor:
@@ -58,6 +73,7 @@ class Actor:
         system_prompt = ACTOR_PROMPT_TEMPLATE.format(
             allowed=", ".join(allowed),
             stop_rule=STOP_AVAILABLE_RULE if STOP in allowed else STOP_MASKED_RULE,
+            obstacle_rule="" if FORWARD in allowed else FORWARD_MASKED_RULE,
         )
         prompt = "\n".join(
             part

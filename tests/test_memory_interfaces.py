@@ -35,7 +35,7 @@ class _Captioner:
     def __init__(self):
         self.requests = []
 
-    def analyze_steps(self, request):
+    def analyze(self, request):
         self.requests.append(request)
         return _Record(f"window-{len(self.requests)}")
 

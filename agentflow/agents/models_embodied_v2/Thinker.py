@@ -4,7 +4,15 @@ import threading
 from typing import Any, Callable, Optional, Tuple
 
 from agentflow.agents.engine.factory import create_llm_engine
-from .Actor import ACTION_TOKENS, MOVE_TOKENS, Actor, DEFAULT_MODEL_PATH
+from .Actor import (
+    ACTION_TOKENS,
+    MOVE_TOKENS,
+    TURN_LEFT,
+    TURN_RIGHT,
+    Actor,
+    DEFAULT_MODEL_PATH,
+)
+from .freespace_gate import EscapeDirection
 from .memory import CompositeMemory
 from .memory.subtask_tracker import SubtaskTracker, coerce_distance, extract_json
 from .stop_gate import StopDecision, StopGate
@@ -52,9 +60,45 @@ memory, and recent actions, output one concise directive for ModelB: which way t
 turn, what to move toward, what to avoid, and any blocking obstacle.
 ModelB can only move forward 0.25 m or turn left/right 15 degrees.
 
+Every directive must name a heading the robot can physically drive along -- open
+floor, a doorway, a corridor, a gap between furniture. Seeing the target is not
+the same as having a path to it: when the straight line to the target runs into a
+wall or furniture, say which side to turn toward to get around it.
+
 A separate gate owns the stop decision and already knows the measured distance to
 the target. Never write "stop" unless the gate reported stopping is permitted.
 No action tokens."""
+
+
+# Asked only when the path forward has already failed, so the question is not
+# "where is the target" -- it is the narrower and far more answerable "where is
+# there floor I can drive on".
+ESCAPE_DIRECTION_PROMPT = """Free-space scout for a navigation robot whose path
+straight ahead is physically blocked -- it commanded FORWARD and did not move.
+
+Ignore the destination for a moment. Look at the image and name the nearest
+direction holding traversable floor the robot could actually drive through: a
+doorway, a corridor, a gap between furniture, or plain open floor. A surface
+behind glass, a closed door, or a raised obstacle is not traversable.
+
+JSON only:
+{"direction": "<left|right>", "bearing_deg": <degrees to turn, 15-180>,
+ "opening": "<doorway|corridor|gap|open floor|none>",
+ "reason": "<one short sentence naming what you see there>"}
+
+The camera sees roughly 90 degrees, so a bearing beyond that means "keep turning
+that way and look again". Prefer the side showing more uninterrupted floor; if
+neither side shows any, answer the side with the larger bearing."""
+
+
+def _coerce_bearing(raw: Any) -> Optional[float]:
+    """Read a turn magnitude in degrees, whatever sign or units slipped in."""
+    value = coerce_distance(raw)
+    if value is None:
+        value = coerce_distance(str(raw).lstrip("-+") if raw is not None else None)
+    if value is None:
+        return None
+    return min(180.0, abs(value))
 
 
 class Thinker:
@@ -427,6 +471,70 @@ class Thinker:
                 flush=True,
             )
         return visible, distance
+
+    def propose_escape(
+        self,
+        rgb_image: Any,
+        *,
+        blocked_note: str = "",
+        turn_degrees: float = 15.0,
+        max_turn_steps: int = 12,
+    ) -> Optional[EscapeDirection]:
+        """Scout one traversable heading from the current observation.
+
+        Runs on the caller's thread, like :meth:`update_tracker_only`: the agent
+        only asks once the worker has returned this step's directive, and the
+        answer is needed before the action is chosen.
+        """
+        image_bytes = self.actor.rgb_to_bytes(rgb_image)
+        prompt = "\n".join(
+            part
+            for part in (
+                "The robot commanded FORWARD and did not move.",
+                blocked_note,
+                f"Goal for context (do not chase it into a wall): {self.goal}",
+                "Where is the nearest traversable opening?",
+            )
+            if part
+        )
+        try:
+            payload = extract_json(
+                self._llm(
+                    [prompt, image_bytes],
+                    system_prompt=ESCAPE_DIRECTION_PROMPT,
+                    max_tokens=128,
+                    temperature=0,
+                )
+            )
+        except ValueError as exc:
+            if self.show_output:
+                print(f"[ModelA escape scout unparsed] {exc}", flush=True)
+            return None
+        if not isinstance(payload, dict):
+            return None
+        direction = str(payload.get("direction", "")).strip().lower()
+        if direction not in {"left", "right"}:
+            return None
+        # `direction` already carries the sign, so a signed bearing is just the
+        # same information written twice; magnitude is all that is left to read.
+        bearing = _coerce_bearing(payload.get("bearing_deg"))
+        steps = (
+            max(1, min(max_turn_steps, round(bearing / turn_degrees)))
+            if bearing is not None
+            else min(max_turn_steps, round(90.0 / turn_degrees))
+        )
+        escape = EscapeDirection(
+            TURN_LEFT if direction == "left" else TURN_RIGHT,
+            steps,
+            opening=str(payload.get("opening", "unknown")).strip() or "unknown",
+            reason=str(payload.get("reason", "")).strip(),
+        )
+        if self.show_output:
+            print(
+                f"[ModelA escape scout] {escape.describe(turn_degrees=turn_degrees)}",
+                flush=True,
+            )
+        return escape
 
     def _update_completion_status(
         self,
