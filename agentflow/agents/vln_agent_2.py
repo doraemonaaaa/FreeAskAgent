@@ -146,8 +146,10 @@ class Actor:
             self.task_memory.reset(goal=instruction, subgoals=subgoals)
 
         if self.temporal_memory is None:
+            # Reuse the actor's engine so one Qwen3-VL checkpoint serves both
+            # waypoint selection and temporal analysis.
             self.temporal_memory = TemporalMemory(
-                captioner=TemporalCaptioner(),
+                captioner=TemporalCaptioner(engine=self.llm),
                 task_memory=self.task_memory,
             )
         else:
