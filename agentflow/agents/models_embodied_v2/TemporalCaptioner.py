@@ -1,4 +1,4 @@
-"""Compact Qwen judgement for eight consecutive VLN observations."""
+"""Compact Qwen judgement for up to eight consecutive VLN observations."""
 
 from __future__ import annotations
 
@@ -43,7 +43,8 @@ class _ModelResult(BaseModel):
     error_mode: ErrorMode
 
 
-SYSTEM_PROMPT = """Inspect eight ordered first-person navigation images.
+SYSTEM_PROMPT = """Inspect the ordered first-person navigation images, oldest
+first. There may be as few as one image early in a subgoal.
 Judge whether the final image visibly proves the current subgoal is complete.
 Also detect a cumulative visual error:
 - WALL_STUCK: the camera stays at the same nearby obstacle.
@@ -51,8 +52,9 @@ Also detect a cumulative visual error:
 - IN_PLACE_SPIN: views rotate and return to earlier views without progress.
 - GET_NOWHERE: the sequence shows no meaningful visual progress.
 
-Set error=false and error_mode=NONE when no error is visible. Output only the
-requested compact JSON."""
+Set error=false and error_mode=NONE when no error is visible. A cumulative
+error needs several images as evidence, so report NONE when too few are given.
+Output only the requested compact JSON."""
 
 
 class TemporalCaptioner:
@@ -114,7 +116,8 @@ class TemporalCaptioner:
     def _content(self, request: TemporalAnalysisRequest) -> list[Any]:
         content: list[Any] = [
             f"Subgoal: {request.subgoal.description}\n"
-            f"Completion proof: {request.subgoal.completion_criteria}"
+            f"Completion proof: {request.subgoal.completion_criteria}\n"
+            f"Images: {len(request.frames)}, ordered oldest first."
         ]
         content.extend(self._png(frame.image) for frame in request.frames)
         content.append(

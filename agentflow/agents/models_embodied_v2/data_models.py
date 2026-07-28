@@ -63,8 +63,10 @@ class TemporalAnalysisRequest:
             raise TemporalInputError("subgoal must be a Subgoal")
         frames = tuple(self.frames)
         object.__setattr__(self, "frames", frames)
-        if len(frames) != 8:
-            raise TemporalInputError("request requires exactly eight frames")
+        if not frames:
+            raise TemporalInputError("request requires at least one frame")
+        if len(frames) > 8:
+            raise TemporalInputError("request allows at most eight frames")
         if any(not isinstance(frame, TemporalFrameInput) for frame in frames):
             raise TemporalInputError("frames must contain TemporalFrameInput values")
         ids = [frame.frame_id for frame in frames]
@@ -138,12 +140,17 @@ class TemporalMemoryConfig:
     window_size: int = 8
     stationary_threshold: float = 0.02
     revisit_threshold: float = 0.05
+    min_error_detection_frames: int = 4
 
     def __post_init__(self) -> None:
         if self.window_size != 8:
             raise ValueError("Temporal Memory uses a fixed eight-frame window")
         if not 0 < self.stationary_threshold < self.revisit_threshold < 1:
             raise ValueError("visual thresholds must satisfy 0 < stationary < revisit < 1")
+        if not 3 <= self.min_error_detection_frames <= self.window_size:
+            raise ValueError(
+                "min_error_detection_frames must be between 3 and window_size"
+            )
 
 
 @dataclass(frozen=True, slots=True)

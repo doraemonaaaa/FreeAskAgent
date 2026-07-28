@@ -61,7 +61,11 @@ def _image_copy(image: Any) -> Any:
 
 
 class TemporalMemory:
-    """Build one sliding eight-frame request and publish temporal events."""
+    """Analyze the sliding window on every new frame and publish its events.
+
+    The window holds at most eight frames, but analysis runs as soon as Task
+    Memory delivers one observation rather than waiting for a full window.
+    """
 
     def __init__(
         self,
@@ -169,14 +173,19 @@ class TemporalMemory:
         return frame
 
     def update_from_task_memory(self) -> Optional[CaptionResult]:
-        """Consume the latest Task Memory RGB and analyze when eight are ready."""
+        """Consume the latest Task Memory RGB and analyze the current window."""
+        self._sync_task_state()
+        # An exhausted plan leaves no subgoal to judge against. Appending would
+        # raise, so report "nothing analyzed" and let the caller end the task.
+        if self._subgoal is None:
+            return None
         if self.append_latest_observation() is None:
             return None
         return self.analyze_if_ready()
 
     def analyze_if_ready(self) -> Optional[CaptionResult]:
         self._sync_task_state()
-        if len(self._frames) < 8:
+        if not self._frames:
             return None
         newest = self._frames[-1].frame_id
         if newest == self._last_analyzed_frame:
@@ -192,8 +201,8 @@ class TemporalMemory:
         self._sync_task_state()
         if self._subgoal is None:
             raise TemporalStateError("current subgoal is not set")
-        if len(self._frames) != 8:
-            raise TemporalStateError("exactly eight frames are required")
+        if not self._frames:
+            raise TemporalStateError("at least one frame is required")
         request = TemporalAnalysisRequest(
             subgoal=self._subgoal,
             frames=tuple(
@@ -223,7 +232,10 @@ class TemporalMemory:
         return (
             self._latest_result.to_memory_text()
             if self._latest_result
-            else f"Temporal window: {len(self._frames)}/8 frames"
+            else (
+                f"Temporal window: {len(self._frames)}/"
+                f"{self._frames.maxlen} frames"
+            )
         )
 
     def diagnostics(self, *, include_raw_response: bool = False) -> dict[str, Any]:
@@ -297,14 +309,19 @@ class TemporalMemory:
 
     def _detect_error_mode(self) -> ErrorMode:
         """Detect cumulative errors from the visual sequence only."""
+        count = len(self._frames)
+        # Cumulative motion errors need a short sequence to be visible at all;
+        # one or two frames carry no evidence of oscillation or lack of progress.
+        if count < self.config.min_error_detection_frames:
+            return "NONE"
         signatures = [_visual_signature(frame.image) for frame in self._frames]
         adjacent = [
             _visual_distance(signatures[index - 1], signatures[index])
-            for index in range(1, 8)
+            for index in range(1, count)
         ]
         lag_two = [
             _visual_distance(signatures[index - 2], signatures[index])
-            for index in range(2, 8)
+            for index in range(2, count)
         ]
         moving_threshold = max(
             self.config.stationary_threshold * 2,
@@ -312,12 +329,13 @@ class TemporalMemory:
         )
 
         if (
-            sum(value >= moving_threshold for value in adjacent) >= 4
+            sum(value >= moving_threshold for value in adjacent)
+            >= _required_count(4, 7, len(adjacent))
             and sum(
                 value <= self.config.stationary_threshold
                 for value in lag_two
             )
-            >= 4
+            >= _required_count(4, 6, len(lag_two))
         ):
             return "TURN_OSCILLATION"
 
@@ -325,12 +343,12 @@ class TemporalMemory:
             later - earlier >= 3
             and _visual_distance(signatures[earlier], signatures[later])
             <= self.config.revisit_threshold
-            for earlier in range(8)
-            for later in range(earlier + 1, 8)
-            if later > earlier
+            for earlier in range(count)
+            for later in range(earlier + 1, count)
         )
         if (
-            sum(value >= moving_threshold for value in adjacent) >= 5
+            sum(value >= moving_threshold for value in adjacent)
+            >= _required_count(5, 7, len(adjacent))
             and revisited_view
         ):
             return "IN_PLACE_SPIN"
@@ -339,13 +357,22 @@ class TemporalMemory:
             distance <= self.config.stationary_threshold
             for distance in adjacent
         )
-        if stationary_transitions >= 5:
+        if stationary_transitions >= _required_count(5, 7, len(adjacent)):
             return "GET_NOWHERE"
         return "NONE"
 
     def _publish(self, event: TemporalEvent) -> None:
         self._events.append(event)
         self.task_memory.publish_temporal_event(event)
+
+
+def _required_count(numerator: int, denominator: int, total: int) -> int:
+    """Scale a full-window evidence threshold to a partial window.
+
+    The full eight-frame window keeps its original absolute thresholds; a
+    shorter window requires the same proportion of supporting transitions.
+    """
+    return max(1, -(-numerator * total // denominator))
 
 
 def _visual_signature(image: Any) -> Any:

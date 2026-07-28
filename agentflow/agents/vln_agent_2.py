@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -33,13 +34,17 @@ from agentflow.agents.models_embodied_v2.memory.temporal_memory import TemporalM
 
 DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
 
-POINT_PROMPT = """You are an indoor navigation waypoint selector. Given the RGB
-image and instruction, decide whether the navigation instruction is complete.
-If complete, reply only with {\"stop\": true}. Otherwise select one visible,
-obstacle-free floor point that makes progress. Do not select walls, furniture,
-stairs, image borders, or the sky. Reply only with {\"stop\": false, \"u\":
-integer, \"v\": integer}. Pixel coordinates use u=column from the left and
-v=row from the top."""
+POINT_PROMPT = """You are an indoor navigation waypoint selector. Steer toward
+the navigation target given below and nothing else. Select one visible,
+obstacle-free floor point that makes progress toward it. Do not select walls,
+furniture, stairs, image borders, or the sky. Reply only with {\"stop\": false,
+\"u\": integer, \"v\": integer}. Pixel coordinates use u=column from the left
+and v=row from the top.
+
+The target may be one subgoal of a longer route, numbered "(n of m)". Reply
+{\"stop\": true} only when that subgoal is the last one and its completion
+evidence is visible now. Finishing an earlier subgoal is never a reason to
+stop, because the route continues past it."""
 
 SUBGOAL_PROMPT = """You are an indoor navigation task planner. Decompose the
 given navigation instruction into a short, ordered sequence of subgoal
@@ -91,6 +96,12 @@ class Actor:
         self.patch_radius_px = patch_radius_px
         self.max_patch_depth_spread_m = max_patch_depth_spread_m
         self.last_model_response: Optional[str] = None
+        # Per-``act`` wall-clock breakdown, in milliseconds, for latency debugging.
+        self.last_timings: dict[str, float] = {}
+        # The analysis produced during the last ``act``, or None when Temporal
+        # Memory did not analyze. Held here because reading Temporal Memory's
+        # own ``latest_result`` clears it as soon as the subgoal advances.
+        self.last_caption: Optional[Any] = None
         self.task_instruction: Optional[str] = None
         self.subgoals: list[Subgoal] = []
         self.last_subgoal_response: Optional[str] = None
@@ -173,11 +184,38 @@ class Actor:
         only when its configuration uses normalized [0, 1] observations, and
         provide that sensor's ``depth_min_m`` and ``depth_max_m`` bounds.
         """
+        started = time.perf_counter()
         image = self._as_rgb_array(rgb)
+        timings = {"rgb_ms": (time.perf_counter() - started) * 1000}
+
+        memory_started = time.perf_counter()
+        caption = None
         if self.task_memory is not None:
             self.task_memory.record_input(image)
             if self.temporal_memory is not None:
-                self.temporal_memory.update_from_task_memory()
+                caption = self.temporal_memory.update_from_task_memory()
+        self.last_caption = caption
+        timings.update({
+            # Whole memory phase: frame copy, rule-based error detection, and
+            # the Captioner call when Temporal Memory analyzes this step.
+            "memory_ms": (time.perf_counter() - memory_started) * 1000,
+            # The Captioner's own model time, so the rule-based visual
+            # bookkeeping around it can be read as the difference.
+            "captioner_ms": caption.latency_ms if caption is not None else 0.0,
+        })
+
+        # Every planned subgoal is done, so the task itself is done. Stop here
+        # rather than asking the model to steer towards a subgoal that no
+        # longer exists.
+        if self.task_memory is not None and self.task_memory.is_task_complete():
+            self.last_model_response = "all subgoals complete"
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=True,
+                raw_response=self.last_model_response,
+            )
+
+        depth_started = time.perf_counter()
         depth_m = self._depth_in_meters(
             depth,
             image.shape[:2],
@@ -193,18 +231,36 @@ class Actor:
         transform = np.asarray(camera_to_world, dtype=np.float64)
         if transform.shape != (4, 4):
             raise ValueError("camera_to_world must be a 4x4 Habitat camera-to-world matrix.")
+        timings["depth_ms"] = (time.perf_counter() - depth_started) * 1000
 
-        requested_uv = self._select_pixel(image, instruction)
+        # Read Task Memory only after Temporal Memory has published this
+        # step's analysis, so waypoint selection steers by the subgoal this
+        # step established rather than the previous step's.
+        select_started = time.perf_counter()
+        requested_uv = self._select_pixel(
+            image,
+            instruction,
+            subgoal_context=(
+                self.task_memory.current_subgoal_context()
+                if self.task_memory is not None
+                else ""
+            ),
+        )
+        timings["select_pixel_ms"] = (time.perf_counter() - select_started) * 1000
         if requested_uv is None:
+            self._record_timings(timings, started)
             return NavigationDecision(
                 stop=True,
                 raw_response=self.last_model_response,
             )
+        waypoint_started = time.perf_counter()
         u, v = self._nearest_walkable_pixel(depth_m, requested_uv)
         point_camera = self._back_project(u, v, float(depth_m[v, u]), calibration)
         point_world = transform @ np.array((*point_camera, 1.0), dtype=np.float64)
         if not np.isclose(point_world[3], 1.0) and point_world[3] != 0.0:
             point_world /= point_world[3]
+        timings["waypoint_ms"] = (time.perf_counter() - waypoint_started) * 1000
+        self._record_timings(timings, started)
         return NavigationDecision(
             stop=False,
             point=NavigationPoint(
@@ -216,14 +272,24 @@ class Actor:
             raw_response=self.last_model_response,
         )
 
+    def _record_timings(self, timings: dict[str, float], started: float) -> None:
+        timings["total_ms"] = (time.perf_counter() - started) * 1000
+        self.last_timings = timings
+
     def _select_pixel(
-        self, image: np.ndarray, instruction: str
+        self,
+        image: np.ndarray,
+        instruction: str,
+        *,
+        subgoal_context: str = "",
     ) -> Optional[tuple[int, int]]:
         height, width = image.shape[:2]
-        prompt = (
-            f"Navigation instruction: {instruction}\n"
-            f"Image width: {width}; image height: {height}."
-        )
+        # Without Task Memory there are no subgoals, so the whole instruction
+        # is the only navigation target available.
+        prompt = "\n".join((
+            subgoal_context or "Navigation instruction: {}".format(instruction),
+            f"Image width: {width}; image height: {height}.",
+        ))
         response = self.llm(
             [prompt, self._rgb_to_png(image)],
             system_prompt=POINT_PROMPT,
@@ -268,7 +334,7 @@ class Actor:
     def _nearest_walkable_pixel(
         self, depth_m: np.ndarray, requested_uv: tuple[int, int]
     ) -> tuple[int, int]:
-        """Prefer the model point, then search nearby valid floor-image pixels."""
+        """Prefer strict floor-like pixels, then fall back to valid depth pixels."""
         height, width = depth_m.shape
         requested_u, requested_v = requested_uv
         # Candidate rows exclude the upper image, where ceilings and far walls
@@ -276,30 +342,66 @@ class Actor:
         min_v = int(height * 0.45)
         requested_u = int(np.clip(requested_u, 0, width - 1))
         requested_v = int(np.clip(requested_v, min_v, height - 1))
-        candidates: list[tuple[float, int, int]] = []
-        for radius in range(0, max(height, width), max(1, self.patch_radius_px + 1)):
-            if candidates:
-                break
-            u0, u1 = max(0, requested_u - radius), min(width, requested_u + radius + 1)
-            v0, v1 = max(min_v, requested_v - radius), min(height, requested_v + radius + 1)
-            for v in range(v0, v1):
-                for u in range(u0, u1):
-                    if self._is_walkable_depth(depth_m, u, v):
-                        distance = float((u - requested_u) ** 2 + (v - requested_v) ** 2)
-                        candidates.append((distance, u, v))
-        if not candidates:
-            raise ValueError("Depth observation contains no valid walkable waypoint.")
-        _, u, v = min(candidates)
-        return u, v
+        valid = (
+            np.isfinite(depth_m)
+            & (depth_m >= self.min_depth_m)
+            & (depth_m <= self.max_depth_m)
+        )
+        # The patch test is morphological: a pixel is walkable when the valid
+        # depths surrounding it span no more than the allowed spread. Running
+        # it over the whole frame at once replaces one slice per pixel. The
+        # window covers the full frame, not just the candidate rows, so the
+        # topmost candidate row still sees the pixels above it.
+        masked = np.where(valid, depth_m, np.nan)
+        spread = (
+            self._window_extreme(masked, self.patch_radius_px, np.fmax)
+            - self._window_extreme(masked, self.patch_radius_px, np.fmin)
+        )
+        walkable = valid & (spread <= self.max_patch_depth_spread_m)
 
-    def _is_walkable_depth(self, depth_m: np.ndarray, u: int, v: int) -> bool:
-        value = float(depth_m[v, u])
-        if not self.min_depth_m <= value <= self.max_depth_m:
-            return False
-        radius = self.patch_radius_px
-        patch = depth_m[max(0, v - radius):v + radius + 1, max(0, u - radius):u + radius + 1]
-        valid = patch[np.isfinite(patch) & (patch >= self.min_depth_m) & (patch <= self.max_depth_m)]
-        return valid.size > 0 and float(np.max(valid) - np.min(valid)) <= self.max_patch_depth_spread_m
+        # Habitat depth can be noisy or discontinuous near chair legs, door
+        # frames, and image borders. Keep a valid-depth fallback so one bad
+        # local patch does not abort the whole episode.
+        region = walkable[min_v:]
+        if not region.any():
+            region = valid[min_v:]
+        if not region.any():
+            raise ValueError("Depth observation contains no valid walkable waypoint.")
+
+        rows, columns = np.nonzero(region)
+        rows = rows + min_v
+        distances = (columns - requested_u) ** 2 + (rows - requested_v) ** 2
+        # The scan this replaces took the smallest (distance, u, v) tuple, so
+        # ties resolve towards the lower column before the lower row.
+        tied = distances == distances.min()
+        best_u = columns[tied].min()
+        best_v = rows[tied & (columns == best_u)].min()
+        return int(best_u), int(best_v)
+
+    @staticmethod
+    def _window_extreme(values: np.ndarray, radius: int, combine: Any) -> np.ndarray:
+        """Reduce each square window of side ``2 * radius + 1``, ignoring NaN.
+
+        The reduction is separable, so two one-dimensional passes replace the
+        square window. ``np.fmax`` and ``np.fmin`` skip NaN, which is why
+        padding out-of-frame positions with NaN reproduces the clamped patch
+        slicing this replaces: absent pixels simply do not contribute.
+        """
+        if radius <= 0:
+            return values
+        for axis in (0, 1):
+            padding = [(0, 0), (0, 0)]
+            padding[axis] = (radius, radius)
+            padded = np.pad(values, padding, constant_values=np.nan)
+            length = values.shape[axis]
+            reduced = None
+            for offset in range(2 * radius + 1):
+                index = [slice(None), slice(None)]
+                index[axis] = slice(offset, offset + length)
+                window = padded[tuple(index)]
+                reduced = window if reduced is None else combine(reduced, window)
+            values = reduced
+        return values
 
     @staticmethod
     def _back_project(u: int, v: int, depth_m: float, intrinsics: CameraIntrinsics) -> np.ndarray:

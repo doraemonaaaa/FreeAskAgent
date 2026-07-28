@@ -161,6 +161,35 @@ class TaskMemory:
     def record_event(self, event: str, content: str) -> None:
         self.events.append(f"{event}: {content}")
 
+    def is_task_complete(self) -> bool:
+        """True once every planned subgoal has been reported complete.
+
+        An empty plan is not completion: it means no plan was ever installed,
+        which must not be mistaken for having finished one.
+        """
+        return bool(self._subgoals) and self._current_subgoal_index >= len(
+            self._subgoals
+        )
+
+    def current_subgoal_context(self) -> str:
+        """Return only the active subgoal, which is all the Actor steers by.
+
+        ``context`` stays the broader planner-facing view; the Actor gets this
+        narrower one so a finished stage cannot pull its waypoint backwards.
+        """
+        current = self.get_current_subgoal()
+        if current is None:
+            return "All subgoals are complete."
+        return (
+            "Current subgoal ({} of {}): {}\n"
+            "Completion evidence: {}".format(
+                self._current_subgoal_index + 1,
+                len(self._subgoals),
+                current.description,
+                current.completion_criteria,
+            )
+        )
+
     def context(self) -> str:
         current = self.get_current_subgoal()
         current_text = (
