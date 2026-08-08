@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1600" height="420" viewBox="0 0 1600 420">
+<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#64748b"/></marker></defs>
+<rect width="100%" height="100%" fill="white"/>
+<text x="35" y="42" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="700" fill="#1f2937"><tspan x="35" dy="0">(b) Episode 505</tspan></text>
+<text x="1120" y="42" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#334155"><tspan x="1120" dy="0">Success  |  SPL 0.964  ·  DTG 0.50 m</tspan></text>
+<line x1="35" y1="61" x2="1565" y2="61" stroke="#cbd5e1" stroke-width="2"/>
+<text x="35" y="92" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="400" fill="#334155"><tspan x="35" dy="0">Instruction: Walk straight down the hallway. Turn left at glass door. Turn right at hallway. Walk to table on the right and stop.</tspan></text>
+<text x="35" y="128" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#334155"><tspan x="35" dy="0">Temporal evidence</tspan></text>
+<text x="805" y="128" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#334155"><tspan x="805" dy="0">Executed trajectory</tspan></text>
+<text x="1190" y="128" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#334155"><tspan x="1190" dy="0">Prepared subgoals</tspan></text>
+<rect x="35" y="145" width="220" height="130" rx="4" fill="white" stroke="#64748b" stroke-width="2"/>
+<image xlink:href="qualitative_505_frame_1.png" x="37" y="147" width="216" height="126" preserveAspectRatio="xMidYMid slice"/>
+<text x="35" y="302" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#475569"><tspan x="35" dy="0">step 0</tspan></text>
+<line x1="259" y1="210" x2="280" y2="210" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="285" y="145" width="220" height="130" rx="4" fill="white" stroke="#2e7d32" stroke-width="2"/>
+<image xlink:href="qualitative_505_frame_2.png" x="287" y="147" width="216" height="126" preserveAspectRatio="xMidYMid slice"/>
+<text x="285" y="302" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#475569"><tspan x="285" dy="0">step 37</tspan></text>
+<line x1="509" y1="210" x2="530" y2="210" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="535" y="145" width="220" height="130" rx="4" fill="white" stroke="#b45309" stroke-width="2"/>
+<image xlink:href="qualitative_505_frame_3.png" x="537" y="147" width="216" height="126" preserveAspectRatio="xMidYMid slice"/>
+<text x="535" y="302" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#475569"><tspan x="535" dy="0">step 45</tspan></text>
+<image xlink:href="qualitative_505_trajectory.png" x="805" y="145" width="350" height="195" preserveAspectRatio="xMidYMid meet"/>
+<circle cx="1200" cy="162" r="7" fill="#2e7d32"/>
+<text x="1218" y="168" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#1f2937"><tspan x="1218" dy="0">S1  Reach left-turn point</tspan></text>
+<text x="1218" y="190" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#2e7d32"><tspan x="1218" dy="0">Done</tspan></text>
+<circle cx="1200" cy="217" r="7" fill="#2e7d32"/>
+<text x="1218" y="223" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#1f2937"><tspan x="1218" dy="0">S2  Turn left; reach right-turn point</tspan></text>
+<text x="1218" y="245" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#2e7d32"><tspan x="1218" dy="0">Done</tspan></text>
+<circle cx="1200" cy="272" r="7" fill="#2e7d32"/>
+<text x="1218" y="278" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#1f2937"><tspan x="1218" dy="0">S3  Turn right and align</tspan></text>
+<text x="1218" y="300" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#2e7d32"><tspan x="1218" dy="0">Done</tspan></text>
+<circle cx="1200" cy="327" r="7" fill="#b45309"/>
+<text x="1218" y="333" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#1f2937"><tspan x="1218" dy="0">S4  Stop beside table</tspan></text>
+<text x="1218" y="355" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#b45309"><tspan x="1218" dy="0">In Progress</tspan></text>
+<text x="35" y="375" font-family="Arial, Helvetica, sans-serif" font-size="16" font-weight="700" fill="#475569"><tspan x="35" dy="0">Temporal status</tspan></text>
+<text x="35" y="401" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#334155"><tspan x="35" dy="0">S1 DONE  →  S2 DONE  →  S3 DONE  →  STOP</tspan></text>
+</svg>

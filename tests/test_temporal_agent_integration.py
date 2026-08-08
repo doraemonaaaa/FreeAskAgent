@@ -5,6 +5,11 @@ from dataclasses import dataclass
 
 import pytest
 
+pytest.skip(
+    "legacy AsyncThinkActVLN integration is superseded by vln_agent_3",
+    allow_module_level=True,
+)
+
 from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Actor import Actor
 from workspace.FreeAskAgent.agentflow.agents.models_embodied_v2.deprecated.Thinker import Thinker
 from agentflow.agents.models_embodied_v2.memory import (

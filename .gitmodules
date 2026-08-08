@@ -4,3 +4,6 @@
 [submodule "low_level/NavDP"]
 	path = low_level/NavDP
 	url = https://github.com/GS-Wang/NavDP.git
+[submodule "plugins/sam3"]
+	path = plugins/sam3
+	url = https://github.com/facebookresearch/sam3.git

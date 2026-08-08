@@ -1,0 +1,32 @@
+Episode ID: 505
+Video: 505.mp4
+
+[Task]
+Walk straight down the hallway. Turn left at glass door. Turn right at hallway. Walk to table on the right and stop.
+
+[Task Guidance Logic]
+1. Preserve the instruction order and split it into the smallest visually verifiable navigation stages.
+2. A commanded action is not completion evidence. Completion must be supported by the post-action visual sequence.
+3. Exiting the starting room requires crossing its doorway; merely approaching or seeing the hallway is insufficient.
+4. A turn subgoal is complete only when the agent reaches the named turn landmark, turns in the required direction, and the post-turn view is aligned with the next route.
+5. The final arrival subgoal requires reaching and stopping beside the destination; merely seeing it at a distance is insufficient.
+6. Evaluate each subgoal independently as completed=true or completed=false and cite only visible video evidence.
+
+[Subgoals]
+1. Exit the starting room through its doorway and enter the hallway.
+   Completion evidence: the camera crosses the starting-room doorway, and the post-action view is clearly from the hallway outside that room.
+
+2. Walk straight down the hallway to the glass door, turn left there, and align with the passage after the turn.
+   Completion evidence: the sequence shows forward progress along the hallway, reaches the glass-door turn point, rotates left there, and ends facing the next traversable passage.
+
+3. Turn right at the following hallway and align with the route toward the table.
+   Completion evidence: a right turn occurs at the hallway, and the post-turn view establishes the new route toward the destination area.
+
+4. Walk to the table on the right and stop beside it.
+   Completion evidence: the right-side table becomes near, the agent reaches its vicinity, and the final frames show the camera stopped there.
+
+[Required Evaluation Output]
+For every subgoal return:
+- subgoal_id
+- completed: true or false
+- evidence: one short statement grounded in the video

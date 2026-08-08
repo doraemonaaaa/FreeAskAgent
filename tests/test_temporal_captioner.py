@@ -49,14 +49,15 @@ def _request() -> TemporalAnalysisRequest:
 
 
 def test_sends_subgoal_and_eight_images_without_actions():
-    response = '{"completed":true,"error":false,"error_mode":"NONE"}'
+    response = '{"completed":true}'
     engine = FakeEngine(response)
     result = TemporalCaptioner(engine=engine).analyze(_request())
 
     content, kwargs = engine.calls[0]
     assert content[0] == (
         "Subgoal: Cross the doorway\n"
-        "Completion proof: The final view is inside the pool room."
+        "Completion proof: The final view is inside the pool room.\n"
+        "Images: 8, ordered oldest first."
     )
     assert sum(isinstance(item, bytes) for item in content) == 8
     assert all("action" not in item.lower() for item in content if isinstance(item, str))
@@ -68,16 +69,13 @@ def test_sends_subgoal_and_eight_images_without_actions():
     assert result.raw_response == response
 
 
-def test_error_result_is_parsed():
+def test_error_detection_is_disabled():
     result = TemporalCaptioner(
-        engine=FakeEngine(
-            '{"completed":false,"error":true,'
-            '"error_mode":"TURN_OSCILLATION"}'
-        )
+        engine=FakeEngine('{"completed":false}')
     ).analyze(_request())
     assert result.completed is False
-    assert result.error is True
-    assert result.error_mode == "TURN_OSCILLATION"
+    assert result.error is False
+    assert result.error_mode == "NONE"
 
 
 def test_float_image_is_normalized():
@@ -85,7 +83,7 @@ def test_float_image_is_normalized():
     first = replace(request.frames[0], image=np.ones((8, 10, 3)))
     request = replace(request, frames=(first, *request.frames[1:]))
     engine = FakeEngine(
-        '{"completed":false,"error":false,"error_mode":"NONE"}'
+        '{"completed":false}'
     )
 
     TemporalCaptioner(engine=engine).analyze(request)
@@ -95,10 +93,21 @@ def test_float_image_is_normalized():
     assert int(decoded.min()) == 255
 
 
-def test_request_requires_exactly_eight_ordered_frames():
+def test_request_allows_one_to_eight_ordered_frames():
     request = _request()
-    with pytest.raises(TemporalInputError, match="exactly eight"):
-        replace(request, frames=request.frames[:7])
+    one_frame = replace(request, frames=request.frames[:1])
+    assert len(one_frame.frames) == 1
+    with pytest.raises(TemporalInputError, match="at most eight"):
+        replace(
+            request,
+            frames=(
+                *request.frames,
+                TemporalFrameInput(
+                    frame_id=9,
+                    image=np.zeros((8, 10, 3), dtype=np.uint8),
+                ),
+            ),
+        )
     with pytest.raises(TemporalInputError, match="unique and increasing"):
         replace(
             request,
@@ -110,7 +119,7 @@ def test_request_requires_exactly_eight_ordered_frames():
     "response",
     (
         "true",
-        '{"completed":false}',
+        '{"complete":false}',
         '{"completed":false,"error":false,"error_mode":"WALL_STUCK"}',
     ),
 )
@@ -123,9 +132,21 @@ def test_invalid_or_inconsistent_output_is_rejected(response):
 
 def test_engine_is_reused_between_windows():
     engine = FakeEngine(
-        '{"completed":false,"error":false,"error_mode":"NONE"}'
+        '{"completed":false}'
     )
     captioner = TemporalCaptioner(engine=engine)
     captioner.analyze(_request())
     captioner.analyze(_request())
     assert len(engine.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        '```json\n{"completed":false}\n```',
+        'Result: {"completed":false} done.',
+    ),
+)
+def test_complete_json_object_is_recovered_from_wrapping_text(response):
+    result = TemporalCaptioner(engine=FakeEngine(response)).analyze(_request())
+    assert result.completed is False

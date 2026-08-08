@@ -61,13 +61,22 @@ def _subgoals():
     )
 
 
-def _memory(*outputs):
+def _memory(
+    *outputs,
+    enable_error_detection=False,
+):
     task = TaskMemory(
         "Exit into the pool room and stop before the pool.",
         subgoals=_subgoals(),
     )
     captioner = FakeCaptioner(*outputs)
-    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory = TemporalMemory(
+        captioner=captioner,
+        task_memory=task,
+        config=TemporalMemoryConfig(
+            enable_error_detection=enable_error_detection
+        ),
+    )
     return memory, captioner, task
 
 
@@ -104,23 +113,24 @@ def test_eight_images_are_copied_and_analyzed_without_actions():
     assert not hasattr(memory, "recent_actions")
 
 
-def test_task_memory_rgb_is_consumed_once_and_analyzed_at_eight_frames():
-    memory, captioner, task = _memory(_result())
+def test_task_memory_rgb_is_consumed_once_and_analyzed_on_each_frame():
+    memory, captioner, task = _memory(
+        *(_result() for _ in range(8))
+    )
 
     for index in range(8):
         task.record_input(_frame(index))
         result = memory.update_from_task_memory()
-        if index < 7:
-            assert result is None
+        assert result is not None
+        assert len(captioner.calls[-1].frames) == index + 1
 
-    assert result is not None
-    assert len(captioner.calls) == 1
+    assert len(captioner.calls) == 8
     assert len(memory.recent_frames()) == 8
     assert memory.update_from_task_memory() is None
     assert len(memory.recent_frames()) == 8
 
 
-def test_each_analysis_publishes_error_and_completion_events():
+def test_each_analysis_publishes_only_completion_event():
     memory, _, task = _memory(
         _result(error=True, error_mode="WALL_STUCK")
     )
@@ -129,23 +139,16 @@ def test_each_analysis_publishes_error_and_completion_events():
 
     events = memory.drain_events()
     assert [event.kind for event in events] == [
-        TemporalEventKind.ERROR,
         TemporalEventKind.SUBGOAL_COMPLETED,
     ]
-    assert events[0].to_dict() == {
-        "kind": "ERROR",
-        "value": True,
-        "subgoal_id": "1",
-        "error_mode": "WALL_STUCK",
-    }
-    assert events[1].value is False
+    assert events[0].value is False
     assert list(task.temporal_events) == [
         event.to_dict() for event in events
     ]
-    assert task.temporal_status == "ERROR=True; mode=WALL_STUCK"
+    assert task.temporal_status == ""
 
 
-def test_captioner_error_is_not_discarded():
+def test_captioner_error_is_normalized_when_detection_is_disabled():
     memory, _, _ = _memory(
         _result(error=True, error_mode="IN_PLACE_SPIN")
     )
@@ -153,13 +156,16 @@ def test_captioner_error_is_not_discarded():
 
     result = memory.analyze()
 
-    assert result.error is True
-    assert result.error_mode == "IN_PLACE_SPIN"
+    assert result.error is False
+    assert result.error_mode == "NONE"
     assert memory.latest_result == result
 
 
-def test_visual_rule_can_add_error_when_model_reports_none():
-    memory, _, task = _memory(_result())
+def test_enabled_error_is_published_without_local_rule_override():
+    memory, _, task = _memory(
+        _result(error=True, error_mode="IN_PLACE_SPIN"),
+        enable_error_detection=True,
+    )
     same = np.zeros((24, 32, 3), dtype=np.uint8)
     for _ in range(8):
         memory.append_observation(same)
@@ -167,8 +173,37 @@ def test_visual_rule_can_add_error_when_model_reports_none():
     result = memory.analyze()
 
     assert result.error is True
-    assert result.error_mode == "GET_NOWHERE"
-    assert task.temporal_status == "ERROR=True; mode=GET_NOWHERE"
+    assert result.error_mode == "IN_PLACE_SPIN"
+    events = memory.drain_events()
+    assert [event.kind for event in events] == [
+        TemporalEventKind.ERROR,
+        TemporalEventKind.SUBGOAL_COMPLETED,
+    ]
+    assert task.temporal_status == "ERROR=True; mode=IN_PLACE_SPIN"
+
+
+def test_enabled_error_requires_consistent_fields():
+    memory, _, _ = _memory(
+        _result(error=False, error_mode="GET_NOWHERE"),
+        enable_error_detection=True,
+    )
+    _push(memory)
+
+    with pytest.raises(TemporalStateError, match="inconsistent"):
+        memory.analyze()
+
+
+def test_visual_rule_does_not_add_error_when_detection_is_disabled():
+    memory, _, task = _memory(_result())
+    same = np.zeros((24, 32, 3), dtype=np.uint8)
+    for _ in range(8):
+        memory.append_observation(same)
+
+    result = memory.analyze()
+
+    assert result.error is False
+    assert result.error_mode == "NONE"
+    assert task.temporal_status == ""
 
 
 def test_completion_advances_subgoal_and_next_frame_clears_old_window():

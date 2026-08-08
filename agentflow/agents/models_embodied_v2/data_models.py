@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 from typing import Any, Literal
 
 import numpy as np
@@ -12,6 +13,8 @@ import numpy as np
 ErrorMode = Literal[
     "NONE", "WALL_STUCK", "TURN_OSCILLATION", "IN_PLACE_SPIN", "GET_NOWHERE"
 ]
+LandmarkDirection = Literal["LEFT", "CENTER", "RIGHT", "UNKNOWN"]
+LandmarkProximity = Literal["FAR", "NEAR", "AT", "UNKNOWN"]
 
 
 class TemporalInputError(ValueError):
@@ -45,12 +48,71 @@ class Subgoal:
 class TemporalFrameInput:
     frame_id: int
     image: Any = field(repr=False)
+    translation_m: float = 0.0
+    yaw_delta_deg: float = 0.0
+    subgoal_path_length_m: float = 0.0
+    landmark_visible: bool = False
+    landmark_direction: LandmarkDirection = "UNKNOWN"
+    landmark_proximity: LandmarkProximity = "UNKNOWN"
+    landmark_passed: bool = False
+    landmark_confidence: float = 0.0
+    landmark_evidence: str = ""
 
     def __post_init__(self) -> None:
         if isinstance(self.frame_id, bool) or not isinstance(self.frame_id, int) or self.frame_id < 1:
             raise TemporalInputError("frame_id must be a positive integer")
         if self.image is None:
             raise TemporalInputError("image must not be None")
+        for name in (
+            "translation_m",
+            "yaw_delta_deg",
+            "subgoal_path_length_m",
+        ):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise TemporalInputError(f"{name} must be a finite number")
+            object.__setattr__(self, name, float(value))
+        if self.translation_m < 0:
+            raise TemporalInputError("translation_m must not be negative")
+        if self.subgoal_path_length_m < 0:
+            raise TemporalInputError(
+                "subgoal_path_length_m must not be negative"
+            )
+        for name in ("landmark_visible", "landmark_passed"):
+            if not isinstance(getattr(self, name), bool):
+                raise TemporalInputError(f"{name} must be a boolean")
+        if self.landmark_direction not in (
+            "LEFT",
+            "CENTER",
+            "RIGHT",
+            "UNKNOWN",
+        ):
+            raise TemporalInputError("invalid landmark_direction")
+        if self.landmark_proximity not in (
+            "FAR",
+            "NEAR",
+            "AT",
+            "UNKNOWN",
+        ):
+            raise TemporalInputError("invalid landmark_proximity")
+        if (
+            isinstance(self.landmark_confidence, bool)
+            or not isinstance(self.landmark_confidence, (int, float))
+            or not math.isfinite(float(self.landmark_confidence))
+            or not 0.0 <= float(self.landmark_confidence) <= 1.0
+        ):
+            raise TemporalInputError(
+                "landmark_confidence must be a number in [0, 1]"
+            )
+        object.__setattr__(
+            self, "landmark_confidence", float(self.landmark_confidence)
+        )
+        if not isinstance(self.landmark_evidence, str):
+            raise TemporalInputError("landmark_evidence must be a string")
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +144,8 @@ class CaptionResult:
     error_mode: ErrorMode
     raw_response: str
     latency_ms: float
+    error_confidence: float = 0.0
+    error_evidence: str = ""
 
     def to_memory_text(self) -> str:
         state = "complete" if self.completed else "in progress"
@@ -89,16 +153,43 @@ class CaptionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DualWindowCaptionResult:
+    """Fused judgement from independent completion and error windows."""
+
+    subgoal_id: str
+    completed: bool
+    error: bool
+    error_mode: ErrorMode
+    completion_window_size: int
+    error_window_size: int
+    completion_raw_response: str
+    error_raw_response: str
+    completion_latency_ms: float
+    error_latency_ms: float
+    latency_ms: float
+    error_confidence: float = 0.0
+    error_evidence: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class TemporalCaptionerConfig:
     max_tokens: int = 48
     max_image_edge: int = 224
     temperature: float = 0.0
+    enable_error_detection: bool = False
+    min_error_detection_frames: int = 4
 
     def __post_init__(self) -> None:
         if self.max_tokens < 8:
             raise ValueError("max_tokens must be at least 8")
         if self.max_image_edge < 32:
             raise ValueError("max_image_edge must be at least 32")
+        if not isinstance(self.enable_error_detection, bool):
+            raise TypeError("enable_error_detection must be a boolean")
+        if not 4 <= self.min_error_detection_frames <= 8:
+            raise ValueError(
+                "min_error_detection_frames must be between 4 and 8"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +203,15 @@ class MemoryFrame:
     frame_id: int
     image: Any = field(repr=False)
     subgoal_id: str = ""
+    translation_m: float = 0.0
+    yaw_delta_deg: float = 0.0
+    subgoal_path_length_m: float = 0.0
+    landmark_visible: bool = False
+    landmark_direction: LandmarkDirection = "UNKNOWN"
+    landmark_proximity: LandmarkProximity = "UNKNOWN"
+    landmark_passed: bool = False
+    landmark_confidence: float = 0.0
+    landmark_evidence: str = ""
 
 
 class TemporalEventKind(str, Enum):
@@ -141,6 +241,7 @@ class TemporalMemoryConfig:
     stationary_threshold: float = 0.02
     revisit_threshold: float = 0.05
     min_error_detection_frames: int = 4
+    enable_error_detection: bool = False
 
     def __post_init__(self) -> None:
         if self.window_size != 8:
@@ -151,6 +252,8 @@ class TemporalMemoryConfig:
             raise ValueError(
                 "min_error_detection_frames must be between 3 and window_size"
             )
+        if not isinstance(self.enable_error_detection, bool):
+            raise TypeError("enable_error_detection must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)

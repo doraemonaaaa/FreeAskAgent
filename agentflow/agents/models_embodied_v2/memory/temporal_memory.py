@@ -276,27 +276,31 @@ class TemporalMemory:
         if result.subgoal_id != self._subgoal.subgoal_id:
             raise TemporalStateError("Captioner returned the wrong subgoal")
 
-        if not result.error:
-            rule_mode = self._detect_error_mode()
-            if rule_mode != "NONE":
-                result = replace(
-                    result,
-                    error=True,
-                    error_mode=rule_mode,
+        # Error events are produced exclusively by the configured temporal
+        # captioner.  A local image-similarity heuristic can turn ordinary
+        # repeated corridor views into false ``GET_NOWHERE`` events and must
+        # not override the dual-window judgement.
+        if self.config.enable_error_detection:
+            if result.error != (result.error_mode != "NONE"):
+                raise TemporalStateError(
+                    "Captioner returned inconsistent error fields"
                 )
+        else:
+            result = replace(result, error=False, error_mode="NONE")
 
         self._latest_result = result
         self._last_error = None
         self._last_analyzed_frame = self._frames[-1].frame_id
 
-        self._publish(
-            TemporalEvent(
-                kind=TemporalEventKind.ERROR,
-                value=result.error,
-                subgoal_id=result.subgoal_id,
-                error_mode=result.error_mode,
+        if self.config.enable_error_detection:
+            self._publish(
+                TemporalEvent(
+                    kind=TemporalEventKind.ERROR,
+                    value=result.error,
+                    subgoal_id=result.subgoal_id,
+                    error_mode=result.error_mode,
+                )
             )
-        )
         self._publish(
             TemporalEvent(
                 kind=TemporalEventKind.SUBGOAL_COMPLETED,

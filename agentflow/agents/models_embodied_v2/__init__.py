@@ -2,6 +2,7 @@
 
 from .TemporalCaptioner import (
     CaptionResult,
+    DualWindowCaptionResult,
     ErrorMode,
     Subgoal,
     TemporalAnalysisRequest,
@@ -20,6 +21,7 @@ from .memory import (
 
 __all__ = (
     "CaptionResult",
+    "DualWindowCaptionResult",
     "ErrorMode",
     "MemoryFrame",
     "Subgoal",
