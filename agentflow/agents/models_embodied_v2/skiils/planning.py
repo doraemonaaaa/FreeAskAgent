@@ -4,23 +4,24 @@ from __future__ import annotations
 
 from dataclasses import replace
 import re
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from agentflow.agents.models_embodied_v2.data_models import Subgoal
 from .protocol import SubgoalPlanOutput
 
 
-JsonExtractor = Callable[[str], dict[str, Any]]
+# One stage per line: "id|description|completion criterion".  Anything that
+# does not open with an integer and a pipe is not a stage line.
+STAGE_LINE = re.compile(r"^\s*(\d+)\s*\|([^|]*)\|([^|]*)$")
 
 
 def parse_subgoal_plan(
     response: str,
     *,
-    extract_json: JsonExtractor,
     instruction: str = "",
 ) -> list[Subgoal]:
     """Parse, strictly validate, and normalize a model-generated plan."""
-    payload = extract_plan_json(response, extract_json=extract_json)
+    payload = parse_plan_lines(response)
     validated = SubgoalPlanOutput.model_validate(payload)
     last_index = len(validated.subgoals) - 1
     subgoals = [
@@ -102,28 +103,37 @@ def validate_plan_fidelity(
             )
 
 
-def extract_plan_json(
-    response: str,
-    *,
-    extract_json: JsonExtractor,
-) -> dict[str, Any]:
-    """Repair only missing quotes on known keys."""
-    try:
-        payload = extract_json(response)
-        if "subgoals" in payload:
-            return payload
-        raise ValueError("response contained only a nested JSON object")
-    except ValueError as original_error:
-        repaired = re.sub(
-            r"(?<=[{,])\s*"
-            r"(subgoals|subgoal_id|description|completion_criteria)"
-            r'"?\s*:',
-            r'"\1":',
-            response,
+def parse_plan_lines(response: str) -> dict[str, Any]:
+    """Read the one-stage-per-line plan format into the plan schema's shape.
+
+    The line format exists because nested JSON arrays are what the planning
+    checkpoint gets wrong; a line carries no structure that can be malformed
+    beyond its two separators.  Parsing stays strict: a line that opens like a
+    stage but does not hold exactly three fields is an error, not something to
+    repair, and ``SubgoalPlanOutput`` still enforces the rest.
+    """
+    stages: list[dict[str, Any]] = []
+    for line in response.splitlines():
+        if not line.strip():
+            continue
+        match = STAGE_LINE.match(line)
+        if match is None:
+            # Tolerate a preamble or trailing prose, never a broken stage line.
+            if re.match(r"^\s*\d+\s*\|", line):
+                raise ValueError(
+                    f"stage line must hold exactly three fields: {line!r}"
+                )
+            continue
+        stages.append(
+            {
+                "subgoal_id": match.group(1),
+                "description": match.group(2).strip(),
+                "completion_criteria": match.group(3).strip(),
+            }
         )
-        if repaired == response:
-            raise original_error
-        return extract_json(repaired)
+    if not stages:
+        raise ValueError("response contained no 'id|description|criterion' line")
+    return {"subgoals": stages}
 
 
 def remove_intermediate_stop(criteria: str) -> str:

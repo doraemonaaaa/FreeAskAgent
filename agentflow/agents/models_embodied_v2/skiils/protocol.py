@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 DEFAULT_MODEL_PATH = "models/JoyAI-VL-Interaction"
-SUBGOAL_GENERATION_ATTEMPTS = 2
+# Planning runs once per episode and its retries are sampled, so a third
+# attempt is cheap insurance against one malformed plan aborting the run.
+SUBGOAL_GENERATION_ATTEMPTS = 3
 WAYPOINT_GENERATION_ATTEMPTS = 2
 LANDMARK_GENERATION_ATTEMPTS = 2
 ERROR_CONFIDENCE_THRESHOLD = 0.9
@@ -94,11 +96,19 @@ visible target plus its near-field relation in evidence. If further motion
 would circle or pass a target already beside the camera, propose STOP."""
 
 SUBGOAL_PROMPT = """You are an indoor navigation task planner. Decompose the
-instruction into a short ordered list and output only this exact JSON shape:
-{"subgoals":[{"subgoal_id":"1","description":"...","completion_criteria":"..."}]}
+instruction into a short ordered list of stages. Write one stage per line in
+exactly this form, and output nothing else — no JSON, no brackets, no bullets,
+no commentary, no blank lines:
+id|description|completion criterion
+
+Example of a complete two-stage answer:
+1|Walk down the hall to the marked doorway|The camera is at the doorway where the next left turn can be executed
+2|Turn left and enter the kitchen|The camera has crossed the threshold and the kitchen interior is central in the view
 
 Rules:
-1. Preserve instruction order and use unique consecutive string IDs.
+1. One stage per line, in instruction order, with IDs counting 1, 2, 3 with no
+   gaps. Each line holds exactly three fields separated by two "|" characters;
+   never write "|" inside a description or a criterion.
 2. Every completion criterion must describe a visually verifiable endpoint,
    never an action merely being attempted or currently in progress.
 3. A movement clause immediately followed by a turn at a landmark completes

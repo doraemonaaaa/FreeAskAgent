@@ -14,11 +14,12 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import replace
 import re
+import time
 from typing import Any, Deque, Optional, Sequence
 
 import numpy as np
 
-from agentflow.agents.engine.factory import create_llm_engine
+from agentflow.agents.models_embodied_v2.actor import Actor
 from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
     TemporalCaptioner,
 )
@@ -60,8 +61,6 @@ from agentflow.agents.models_embodied_v2.skiils.waypoint import WaypointPolicyMi
 from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
     GrowingCompletionMemory,
 )
-
-
 class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     """Version 3 actor used by the Habitat waypoint worker."""
 
@@ -80,29 +79,41 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         temporal_memory=None,
         **kwargs,
     ) -> None:
-        self.llm = engine or create_llm_engine(
-        model_string=f"local-qwen3vl-{model_path}",
-            is_multimodal=True,
-            use_cache=use_cache,
+        # The actor owns observation validation, walkable-pixel snapping, and
+        # back-projection.  This agent owns everything with task state: the
+        # plan, both memories, the navigation phase, and the guards.
+        self.actor = Actor(
+            model_path,
+            engine=engine,
             debug_performance=debug_performance,
+            use_cache=use_cache,
+            min_depth_m=min_depth_m,
+            max_depth_m=max_depth_m,
+            patch_radius_px=patch_radius_px,
+            max_patch_depth_spread_m=max_patch_depth_spread_m,
         )
+        # The landmark and waypoint policies prompt the same checkpoint.
+        self.llm = self.actor.llm
 
-        self.min_depth_m = min_depth_m
-        self.max_depth_m = max_depth_m
-        self.patch_radius_px = patch_radius_px
-        self.max_patch_depth_spread_m = max_patch_depth_spread_m
+        self.last_model_response: Optional[str] = None
+        # Per-``act`` wall-clock breakdown, in milliseconds, for latency
+        # debugging.
+        self.last_timings: dict[str, float] = {}
+        # The analysis produced during the last ``act``, or None when Temporal
+        # Memory did not analyze. Held here because reading Temporal Memory's
+        # own ``latest_result`` clears it as soon as the subgoal advances.
+        self.last_caption: Optional[Any] = None
 
-        self.last_model_response = None
-        self.last_timings = {}
-        self.last_caption = None
-
-        self.task_instruction = None
-        self.subgoals = []
-        self.last_subgoal_response = None
+        self.task_instruction: Optional[str] = None
+        self.subgoals: list[Subgoal] = []
+        self.last_subgoal_response: Optional[str] = None
 
         self.task_memory = task_memory
+        if temporal_memory is not None and task_memory is None:
+            raise ValueError(
+                "temporal_memory requires its associated task_memory."
+            )
         self.temporal_memory = temporal_memory
-
 
         self._landmark_history: Deque[dict[str, Any]] = deque(
             maxlen=LANDMARK_HISTORY_SIZE
@@ -170,8 +181,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         """Run one step while retaining state transitions for debug output."""
         # These flags describe only the waypoint selected during this call.
         # A recovery selection may set one of them below; clear both before
-        # delegating to V2Actor so a completed recovery cannot leak into later
-        # model-selected waypoints.
+        # delegating to the RGB-D layer so a completed recovery cannot leak
+        # into later model-selected waypoints.
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
         current = (
@@ -204,7 +215,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 yaw_delta_deg=yaw_delta_deg,
             )
         landmark = self._track_landmark(
-            self._as_rgb_array(rgb),
+            self.actor.as_rgb_array(rgb),
             current,
             translation_m=translation_m,
             yaw_delta_deg=yaw_delta_deg,
@@ -216,7 +227,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
             self.temporal_memory.set_landmark_evidence(landmark)
         try:
-            decision = self.act(
+            decision = self._waypoint_decision(
                 rgb,
                 depth,
                 instruction,
@@ -235,7 +246,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             # invalid. That is an action-level recovery condition, not a
             # reason to abort the episode. Return a synthetic lateral target;
             # the Habitat runner turns when its follower rejects this point.
-            image = self._as_rgb_array(rgb)
+            image = self.actor.as_rgb_array(rgb)
             transform = np.asarray(camera_to_world, dtype=np.float64)
             position = transform[:3, 3]
             self._force_left_turn_this_step = True
@@ -338,6 +349,112 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 ),
             )
         return decision
+
+    def _waypoint_decision(
+        self,
+        rgb: Any,
+        depth: Any,
+        instruction: str,
+        intrinsics: CameraIntrinsics | Any,
+        camera_to_world: Any,
+        *,
+        normalized_depth: bool = False,
+        depth_min_m: Optional[float] = None,
+        depth_max_m: Optional[float] = None,
+    ) -> NavigationDecision:
+        """Return the stop decision or the world-space RGB-D waypoint.
+
+        Habitat's default depth sensor emits meters.  Set ``normalized_depth``
+        only when its configuration uses normalized [0, 1] observations, and
+        provide that sensor's ``depth_min_m`` and ``depth_max_m`` bounds.
+        """
+        started = time.perf_counter()
+        image = self.actor.as_rgb_array(rgb)
+        timings = {"rgb_ms": (time.perf_counter() - started) * 1000}
+
+        memory_started = time.perf_counter()
+        caption = None
+        if self.task_memory is not None:
+            self.task_memory.record_input(image)
+            if self.temporal_memory is not None:
+                caption = self.temporal_memory.update_from_task_memory()
+        self.last_caption = caption
+        timings.update({
+            # Whole memory phase: frame copy, rule-based error detection, and
+            # the Captioner call when Temporal Memory analyzes this step.
+            "memory_ms": (time.perf_counter() - memory_started) * 1000,
+            # The Captioner's own model time, so the rule-based visual
+            # bookkeeping around it can be read as the difference.
+            "captioner_ms": (
+                caption.latency_ms if caption is not None else 0.0
+            ),
+        })
+
+        # Every planned subgoal is done, so the task itself is done. Stop here
+        # rather than asking the model to steer towards a subgoal that no
+        # longer exists.
+        if self.task_memory is not None and self.task_memory.is_task_complete():
+            self.last_model_response = "all subgoals complete"
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=True,
+                raw_response=self.last_model_response,
+            )
+
+        depth_started = time.perf_counter()
+        depth_m = self.actor.depth_in_meters(
+            depth,
+            image.shape[:2],
+            normalized=normalized_depth,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+        )
+        timings["depth_ms"] = (time.perf_counter() - depth_started) * 1000
+
+        # Read Task Memory only after Temporal Memory has published this
+        # step's analysis, so waypoint selection steers by the subgoal this
+        # step established rather than the previous step's.
+        select_started = time.perf_counter()
+        requested_uv = self._select_pixel(
+            image,
+            instruction,
+            subgoal_context=(
+                self.task_memory.current_subgoal_context()
+                if self.task_memory is not None
+                else ""
+            ),
+        )
+        timings["select_pixel_ms"] = (
+            time.perf_counter() - select_started
+        ) * 1000
+        if requested_uv is None:
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=True,
+                raw_response=self.last_model_response,
+            )
+        waypoint_started = time.perf_counter()
+        point = self.actor.waypoint_from_pixel(
+            requested_uv,
+            depth_m,
+            intrinsics,
+            camera_to_world,
+        )
+        timings["waypoint_ms"] = (time.perf_counter() - waypoint_started) * 1000
+        self._record_timings(timings, started)
+        return NavigationDecision(
+            stop=False,
+            point=point,
+            raw_response=self.last_model_response,
+        )
+
+    def _record_timings(
+        self,
+        timings: dict[str, float],
+        started: float,
+    ) -> None:
+        timings["total_ms"] = (time.perf_counter() - started) * 1000
+        self.last_timings = timings
 
     def _should_stop_from_final_target_evidence(
         self,
@@ -628,22 +745,28 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             else:
                 content = [
                     f"Navigation instruction: {normalized_instruction}\n"
-                    "The previous response failed strict validation. Return "
-                    "only the exact requested JSON schema with unique "
-                    "consecutive string IDs starting at \"1\"."
+                    "The previous response failed strict validation "
+                    f"({last_error}). Write one stage per line as "
+                    "id|description|completion criterion, with IDs counting "
+                    "1, 2, 3 and no gaps. Output only those lines: no JSON, "
+                    "no brackets, no commentary."
                 ]
             response = self.llm(
                 content,
                 system_prompt=SUBGOAL_PROMPT,
-                max_tokens=512,
-                temperature=0,
+                # A plan that nests its stages outgrows the budget it would
+                # need when flat, and a response truncated before its closing
+                # brackets cannot be parsed at all.
+                max_tokens=1024,
+                # Greedy decoding first; a retry has to be allowed to diverge,
+                # or it reproduces the response that just failed.
+                temperature=0.0 if attempt == 0 else 0.7,
             )
             response_text = str(response)
             self.last_subgoal_response = response_text
             try:
                 subgoals = parse_subgoal_plan(
                     response_text,
-                    extract_json=self._extract_json_object,
                     instruction=normalized_instruction,
                 )
                 break
@@ -652,7 +775,12 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         else:
             raise ValueError(
                 "Actor returned invalid subgoal JSON after "
-                f"{SUBGOAL_GENERATION_ATTEMPTS} attempts: {response_text!r}"
+                f"{SUBGOAL_GENERATION_ATTEMPTS} attempts "
+                # Without the underlying exception a plain AttributeError or
+                # NameError in the parsing path is indistinguishable from a
+                # genuinely malformed model response.
+                f"({type(last_error).__name__}: {last_error}): "
+                f"{response_text!r}"
             ) from last_error
 
         self.task_instruction = normalized_instruction
@@ -691,9 +819,16 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self.temporal_memory.reset()
         self._reset_runtime_state()
 
+    # The landmark and waypoint policies prompt the shared checkpoint through
+    # the agent, so both model helpers stay reachable under their mixin names.
+    def _rgb_to_png(self, rgb: np.ndarray) -> bytes:
+        return self.actor.rgb_to_png(rgb)
+
+    def _extract_json_object(self, response: str) -> dict[str, Any]:
+        return self.actor.extract_json_object(response)
+
 
 __all__ = (
-    "Actor",
     "CameraIntrinsics",
     "DEFAULT_MODEL_PATH",
     "GrowingCompletionMemory",
