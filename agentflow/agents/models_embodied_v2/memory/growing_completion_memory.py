@@ -22,7 +22,7 @@ from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
     TemporalMemory,
     TemporalStateError,
 )
-from agentflow.agents.vln_agent_3_protocol import (
+from agentflow.agents.models_embodied_v2.skiils.protocol import (
     DECISION_POINT_MIN_PATH_M,
     DECISION_POINT_TURN_EVIDENCE_DEG,
     DOORWAY_LANDMARK_CONFIDENCE,

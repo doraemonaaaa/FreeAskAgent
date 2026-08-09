@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable, Sequence
 
 from agentflow.agents.models_embodied_v2.data_models import Subgoal
-from agentflow.agents.vln_agent_3_protocol import SubgoalPlanOutput
+from .protocol import SubgoalPlanOutput
 
 
 JsonExtractor = Callable[[str], dict[str, Any]]

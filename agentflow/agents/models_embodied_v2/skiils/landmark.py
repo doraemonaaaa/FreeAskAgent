@@ -12,7 +12,7 @@ from agentflow.agents.models_embodied_v2.data_models import Subgoal
 from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
     GrowingCompletionMemory,
 )
-from agentflow.agents.vln_agent_3_protocol import (
+from .protocol import (
     DOORWAY_CROSSING_M,
     DOORWAY_LANDMARK_CONFIDENCE,
     DOORWAY_MAX_CROSSING_YAW_DEG,

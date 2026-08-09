@@ -31,7 +31,7 @@ from agentflow.agents.vln_agent_2 import (
     NavigationDecision,
     NavigationPoint,
 )
-from agentflow.agents.vln_agent_3_protocol import (
+from agentflow.agents.models_embodied_v2.skiils.protocol import (
     BEHAVIOR_HISTORY_SIZE,
     CORRIDOR_LOCK_FORWARD_STEPS,
     DEFAULT_MODEL_PATH,
@@ -52,12 +52,12 @@ from agentflow.agents.vln_agent_3_protocol import (
     TURN_EVIDENCE_DEG,
     LandmarkOutput as _LandmarkOutput,
 )
+from agentflow.agents.models_embodied_v2.skiils.planning import parse_subgoal_plan
+from agentflow.agents.models_embodied_v2.skiils.landmark import LandmarkTrackerMixin
+from agentflow.agents.models_embodied_v2.skiils.waypoint import WaypointPolicyMixin
 from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
     GrowingCompletionMemory,
 )
-from agentflow.agents.vln_agent_3_planning import parse_subgoal_plan
-from agentflow.agents.vln_agent_3_landmark import LandmarkTrackerMixin
-from agentflow.agents.vln_agent_3_waypoint import WaypointPolicyMixin
 
 
 class Actor(LandmarkTrackerMixin, WaypointPolicyMixin, V2Actor):

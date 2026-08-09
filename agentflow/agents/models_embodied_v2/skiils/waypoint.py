@@ -10,7 +10,7 @@ import numpy as np
 from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
     GrowingCompletionMemory,
 )
-from agentflow.agents.vln_agent_3_protocol import (
+from .protocol import (
     CORRIDOR_WAYPOINT_DEVIATION,
     ERROR_CONFIDENCE_THRESHOLD,
     ERROR_CONFIRMATION_VOTES,
