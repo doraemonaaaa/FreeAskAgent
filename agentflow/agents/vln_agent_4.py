@@ -8,6 +8,7 @@ Version 3 keeps the proven waypoint selection and RGB-D back-projection from
 * a separate recent eight-frame window asks the model to diagnose error modes.
 """
 
+
 from __future__ import annotations
 
 from collections import deque
@@ -17,21 +18,21 @@ from typing import Any, Deque, Optional, Sequence
 
 import numpy as np
 
+from agentflow.agents.engine.factory import create_llm_engine
 from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
     TemporalCaptioner,
 )
 from agentflow.agents.models_embodied_v2.data_models import (
     Subgoal,
     TemporalCaptionerConfig,
-)
-from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
-from agentflow.agents.vln_agent_2 import (
-    Actor as V2Actor,
     CameraIntrinsics,
     NavigationDecision,
     NavigationPoint,
 )
-from agentflow.agents.vln_agent_3_protocol import (
+
+from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
+
+from agentflow.agents.models_embodied_v2.skiils.protocol import (
     BEHAVIOR_HISTORY_SIZE,
     CORRIDOR_LOCK_FORWARD_STEPS,
     DEFAULT_MODEL_PATH,
@@ -52,23 +53,57 @@ from agentflow.agents.vln_agent_3_protocol import (
     TURN_EVIDENCE_DEG,
     LandmarkOutput as _LandmarkOutput,
 )
+from agentflow.agents.models_embodied_v2.skiils.planning import parse_subgoal_plan
+from agentflow.agents.models_embodied_v2.skiils.landmark import LandmarkTrackerMixin
+from agentflow.agents.models_embodied_v2.skiils.waypoint import WaypointPolicyMixin
+
 from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
     GrowingCompletionMemory,
 )
-from agentflow.agents.vln_agent_3_planning import parse_subgoal_plan
-from agentflow.agents.vln_agent_3_landmark import LandmarkTrackerMixin
-from agentflow.agents.vln_agent_3_waypoint import WaypointPolicyMixin
 
 
-class Actor(LandmarkTrackerMixin, WaypointPolicyMixin, V2Actor):
+class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     """Version 3 actor used by the Habitat waypoint worker."""
 
     def __init__(
         self,
         model_path: str = DEFAULT_MODEL_PATH,
-        **kwargs: Any,
+        *,
+        engine=None,
+        debug_performance=False,
+        use_cache=False,
+        min_depth_m=0.25,
+        max_depth_m=10.0,
+        patch_radius_px=3,
+        max_patch_depth_spread_m=0.35,
+        task_memory=None,
+        temporal_memory=None,
+        **kwargs,
     ) -> None:
-        super().__init__(model_path=model_path, **kwargs)
+        self.llm = engine or create_llm_engine(
+        model_string=f"local-qwen3vl-{model_path}",
+            is_multimodal=True,
+            use_cache=use_cache,
+            debug_performance=debug_performance,
+        )
+
+        self.min_depth_m = min_depth_m
+        self.max_depth_m = max_depth_m
+        self.patch_radius_px = patch_radius_px
+        self.max_patch_depth_spread_m = max_patch_depth_spread_m
+
+        self.last_model_response = None
+        self.last_timings = {}
+        self.last_caption = None
+
+        self.task_instruction = None
+        self.subgoals = []
+        self.last_subgoal_response = None
+
+        self.task_memory = task_memory
+        self.temporal_memory = temporal_memory
+
+
         self._landmark_history: Deque[dict[str, Any]] = deque(
             maxlen=LANDMARK_HISTORY_SIZE
         )
@@ -181,7 +216,7 @@ class Actor(LandmarkTrackerMixin, WaypointPolicyMixin, V2Actor):
             )
             self.temporal_memory.set_landmark_evidence(landmark)
         try:
-            decision = super().act(
+            decision = self.act(
                 rgb,
                 depth,
                 instruction,
@@ -656,8 +691,6 @@ class Actor(LandmarkTrackerMixin, WaypointPolicyMixin, V2Actor):
             self.temporal_memory.reset()
         self._reset_runtime_state()
 
-
-VLNAgent = Actor
 
 __all__ = (
     "Actor",
