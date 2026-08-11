@@ -19,9 +19,9 @@ from .protocol import (
     DOORWAY_NEAR_CROSSING_M,
     DOORWAY_SIDE_CROSSING_M,
     LANDMARK_GENERATION_ATTEMPTS,
+    LANDMARK_MAX_TOKENS,
     LANDMARK_PROMPT,
     LandmarkOutput as _LandmarkOutput,
-    STRUCTURED_VLM_MAX_TOKENS,
     VLM_IMAGE_MAX_PIXELS,
     VLM_IMAGE_MIN_PIXELS,
 )
@@ -38,6 +38,8 @@ class LandmarkTrackerMixin:
         translation_m: float,
         yaw_delta_deg: float,
     ) -> _LandmarkOutput:
+        self.last_landmark_normalized = None
+        self.last_landmark_pixel = None
         if subgoal is None:
             landmark = GrowingCompletionMemory._unknown_landmark(
                 "no active subgoal"
@@ -100,7 +102,7 @@ class LandmarkTrackerMixin:
                 system_prompt=LANDMARK_PROMPT,
                 image_min_pixels=VLM_IMAGE_MIN_PIXELS,
                 image_max_pixels=VLM_IMAGE_MAX_PIXELS,
-                max_tokens=STRUCTURED_VLM_MAX_TOKENS,
+                max_tokens=LANDMARK_MAX_TOKENS,
                 temperature=0,
             )
             self.last_landmark_raw_response = str(response)
@@ -165,7 +167,18 @@ class LandmarkTrackerMixin:
                 "tracker output unavailable"
             )
         self.last_landmark = landmark
+        if landmark.u is not None and landmark.v is not None:
+            height, width = image.shape[:2]
+            self.last_landmark_normalized = (landmark.u, landmark.v)
+            self.last_landmark_pixel = (
+                self._scale_normalized(landmark.u, width),
+                self._scale_normalized(landmark.v, height),
+            )
         history_item = landmark.model_dump()
+        # The history is serialized back into the next prompt, where the pixel
+        # of a past frame is meaningless and only costs tokens.
+        history_item.pop("u", None)
+        history_item.pop("v", None)
         history_item.update(
             {
                 "translation_m": translation_m,

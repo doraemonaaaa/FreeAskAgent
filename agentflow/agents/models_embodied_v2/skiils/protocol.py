@@ -44,6 +44,10 @@ VLM_IMAGE_MIN_PIXELS = 64**2
 VLM_IMAGE_MAX_PIXELS = 224**2
 TEMPORAL_MAX_IMAGE_EDGE = 160
 STRUCTURED_VLM_MAX_TOKENS = 64
+# The landmark schema is the longest of the structured outputs, and adding the
+# u/v pair pushes a typical reply past the shared 64-token budget, which would
+# truncate the JSON before its closing brace and fail validation.
+LANDMARK_MAX_TOKENS = 128
 BEHAVIOR_HISTORY_SIZE = 8
 LANDMARK_HISTORY_SIZE = 6
 CORRIDOR_LOCK_FORWARD_STEPS = 2
@@ -136,10 +140,15 @@ named by the active subgoal and completion criterion. Recent tracker states,
 measured motion, the next route stage, and behavior history are context.
 
 Return only this exact JSON:
-{"visible":false,"direction":"UNKNOWN","proximity":"UNKNOWN","passed":false,"destination_dominant":false,"confidence":0.0,"evidence":"brief visual reason"}
+{"visible":false,"direction":"UNKNOWN","proximity":"UNKNOWN","passed":false,"destination_dominant":false,"u":null,"v":null,"confidence":0.0,"evidence":"brief visual reason"}
 
 Rules:
 1. direction is LEFT, CENTER, RIGHT, or UNKNOWN relative to the current image.
+1b. u and v locate the center of the landmark itself in the current image, as
+   normalized integers from 0 to 1000 independent of resolution: u=0 is the
+   left edge, u=1000 the right edge, v=0 the top, v=1000 the bottom. Give both
+   whenever visible is true, and make them agree with direction. Use null for
+   both when the landmark is not visible in this image.
 2. proximity is FAR, NEAR, AT, or UNKNOWN. AT means the camera is at the
    landmark/threshold, not merely that the landmark fills part of the image.
    For an intermediate movement stage followed by a turn, the tracked target
@@ -244,13 +253,47 @@ class LandmarkOutput(BaseModel):
     proximity: Literal["FAR", "NEAR", "AT", "UNKNOWN"]
     passed: bool
     destination_dominant: bool = False
+    # Normalized image location of the landmark, used to draw it on the frame.
+    # Deliberately optional and never required: a missing or out-of-range pair
+    # costs a marker on the visualization, whereas failing validation here
+    # would retry the call and then discard an otherwise usable tracker state.
+    u: Optional[int] = None
+    v: Optional[int] = None
     confidence: float
     evidence: str
+
+    @field_validator("u", "v", mode="before")
+    @classmethod
+    def tolerant_pixel(cls, value: object) -> Optional[int]:
+        """Accept any plausible number and drop anything else.
+
+        Runs before strict typing, which would otherwise reject a reply of
+        512.0 and discard an entire usable tracker state over a coordinate
+        that only the visualization consumes.
+        """
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value.strip()))
+            except ValueError:
+                return None
+        return None
 
     @model_validator(mode="after")
     def consistent_landmark(self) -> "LandmarkOutput":
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0 and 1")
+        if self.u is None or self.v is None or not self.visible:
+            self.u = None
+            self.v = None
+        elif not (0 <= self.u <= 1000 and 0 <= self.v <= 1000):
+            self.u = None
+            self.v = None
         self.evidence = self.evidence.strip()
         if not self.evidence:
             raise ValueError("evidence must not be empty")

@@ -169,6 +169,7 @@ class WaypointPolicyMixin:
         self.last_waypoint_applied_intent = None
         self.last_waypoint_guard_reason = None
         self.last_waypoint_evidence = None
+        self.last_waypoint_confidence = None
         recovery_mode = self._recovery_mode_for_step()
         self.last_recovery_mode = recovery_mode
         current = (
@@ -210,6 +211,7 @@ class WaypointPolicyMixin:
             self.last_waypoint_model_intent = intent
             self.last_waypoint_applied_intent = intent
             self.last_waypoint_evidence = evidence
+            self.last_waypoint_confidence = synthetic.confidence
             self.last_waypoint_guard_reason = (
                 "forced deterministic action waypoint for "
                 f"{fixed_mode}"
@@ -303,6 +305,7 @@ class WaypointPolicyMixin:
         self.last_waypoint_model_intent = waypoint.intent
         self.last_waypoint_applied_intent = waypoint.intent
         self.last_waypoint_evidence = waypoint.evidence
+        self.last_waypoint_confidence = waypoint.confidence
         required_turn = None
         if current is not None:
             turn_match = re.search(

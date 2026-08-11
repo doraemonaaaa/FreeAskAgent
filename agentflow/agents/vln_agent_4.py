@@ -141,12 +141,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_waypoint_applied_intent: Optional[str] = None
         self.last_waypoint_guard_reason: Optional[str] = None
         self.last_waypoint_evidence: Optional[str] = None
+        self.last_waypoint_confidence: Optional[float] = None
         self.last_error_candidate: Optional[str] = None
         self.last_error_guard_reason: Optional[str] = None
         self.last_recovery_mode: Optional[str] = None
         self.last_landmark: Optional[_LandmarkOutput] = None
         self.last_landmark_raw_response: Optional[str] = None
         self.last_landmark_error: Optional[str] = None
+        self.last_landmark_normalized: Optional[tuple[int, int]] = None
+        self.last_landmark_pixel: Optional[tuple[int, int]] = None
         self._landmark_subgoal_id: Optional[str] = None
         self._error_candidate_subgoal: Optional[str] = None
         self._active_recovery_mode: Optional[str] = None
