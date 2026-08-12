@@ -14,6 +14,7 @@ from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
 from agentflow.agents.models_embodied_v2.data_models import (
     CaptionResult,
     MemoryFrame,
+    PreviewSelection,
     TemporalFrameInput,
     TemporalMemoryConfig,
 )
@@ -21,6 +22,10 @@ from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
 from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
     TemporalMemory,
     TemporalStateError,
+)
+from agentflow.agents.models_embodied_v2.skiils.preview import (
+    PreviewSelector,
+    UnimplementedPreviewSelector,
 )
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
     DECISION_POINT_MIN_PATH_M,
@@ -42,6 +47,7 @@ class GrowingCompletionMemory(TemporalMemory):
         *,
         captioner: TemporalCaptioner,
         task_memory: TaskMemory,
+        preview_selector: Optional[PreviewSelector] = None,
     ) -> None:
         super().__init__(
             captioner=captioner,
@@ -56,10 +62,86 @@ class GrowingCompletionMemory(TemporalMemory):
         self._pending_landmark = self._unknown_landmark("tracker not run")
         self._last_completion_frame_ids: tuple[int, ...] = ()
         self._last_completion_guard: Optional[str] = None
+        self.preview_selector: PreviewSelector = (
+            preview_selector or UnimplementedPreviewSelector()
+        )
+        self._preview_views: tuple[Any, ...] = ()
+        self._preview_selection: Optional[PreviewSelection] = None
+        self._preview_error: Optional[str] = None
 
     def reset(self) -> None:
         super().reset()
         self._last_completion_guard = None
+        self.clear_preview()
+
+    def set_preview_views(self, views: Any) -> None:
+        """Hold the surrounding views a PREVIEW asked for, and judge them.
+
+        These are simultaneous views from one standing position, not a temporal
+        sequence, so they are deliberately kept out of ``_frames``: adding
+        several images for a single step would corrupt both the measured path
+        length and the completion evidence.
+
+        Selection runs here, on arrival, because that is the moment the
+        Captioner has everything it needs. A selector that declines or raises
+        leaves the selection unset rather than guessing a heading, so the
+        actor's fallback stays distinguishable from a real judgement.
+        """
+        # Synchronised first: an episode rollover inside ``_sync_task_state``
+        # calls ``reset``, which clears the preview slot, and storing before
+        # that would silently drop the views we were just handed.
+        self._sync_task_state()
+        self._preview_views = tuple(views)
+        self._preview_selection = None
+        self._preview_error = None
+        if not self._preview_views:
+            return
+        try:
+            selection = self.preview_selector.select(
+                subgoal=self._subgoal,
+                views=self._preview_views,
+            )
+        except Exception as exc:
+            self._preview_error = f"{type(exc).__name__}: {exc}"
+            return
+        if selection is not None:
+            self.set_preview_selection(selection)
+
+    def preview_views(self) -> tuple[Any, ...]:
+        """Return the views held for this step, empty when none were taken."""
+        return self._preview_views
+
+    def set_preview_selection(self, selection: PreviewSelection) -> None:
+        """Record which held view the actor should act on.
+
+        The index is bounded against the held views here because a waypoint
+        back-projected through the wrong view's depth and camera transform
+        yields a plausible world coordinate pointing the wrong way.
+        """
+        if not isinstance(selection, PreviewSelection):
+            raise TypeError("selection must be a PreviewSelection")
+        if not self._preview_views:
+            raise TemporalStateError("no preview views are held")
+        if selection.view_index >= len(self._preview_views):
+            raise TemporalStateError(
+                "view_index {} addresses no held view (have {})".format(
+                    selection.view_index, len(self._preview_views)
+                )
+            )
+        self._preview_selection = selection
+
+    def preview_selection(self) -> Optional[PreviewSelection]:
+        """Return the Captioner's choice, or None while it has not answered."""
+        return self._preview_selection
+
+    def last_preview_error(self) -> Optional[str]:
+        """Return why the selector failed on this step, if it did."""
+        return self._preview_error
+
+    def clear_preview(self) -> None:
+        self._preview_views = ()
+        self._preview_selection = None
+        self._preview_error = None
 
     @staticmethod
     def _unknown_landmark(evidence: str) -> _LandmarkOutput:
@@ -421,6 +503,15 @@ class GrowingCompletionMemory(TemporalMemory):
                 "error_window_size": min(len(self._frames), 8),
                 "error_detection_enabled": True,
                 "completion_guard": self._last_completion_guard,
+                # How the preview seam behaved this step: whether views were
+                # held at all, and whether the selector answered for them.
+                "preview_view_count": len(self._preview_views),
+                "preview_selected_view": (
+                    None
+                    if self._preview_selection is None
+                    else self._preview_selection.view_index
+                ),
+                "preview_error": self._preview_error,
                 "recent_motion": [
                     {
                         "frame_id": frame.frame_id,

@@ -24,11 +24,14 @@ from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
     TemporalCaptioner,
 )
 from agentflow.agents.models_embodied_v2.data_models import (
+    ActionMode,
     Subgoal,
     TemporalCaptionerConfig,
     CameraIntrinsics,
     NavigationDecision,
     NavigationPoint,
+    PreviewSelection,
+    PreviewView,
 )
 
 from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
@@ -135,10 +138,21 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_subgoal_after: Optional[str] = None
         self.last_requested_pixel: Optional[tuple[int, int]] = None
         self.last_requested_normalized: Optional[tuple[int, int]] = None
+        # Set instead of the pixel pair when a step rotates in place.
+        self.last_requested_turn_deg: Optional[int] = None
         self.last_waypoint_raw_response: Optional[str] = None
         self.last_waypoint_stop_disposition: Optional[str] = None
         self.last_waypoint_model_intent: Optional[str] = None
         self.last_waypoint_applied_intent: Optional[str] = None
+        self.last_waypoint_model_action_mode: Optional[ActionMode] = None
+        self.last_waypoint_applied_action_mode: Optional[ActionMode] = None
+        # Which surrounding view resolved the last PREVIEW, its heading offset,
+        # the Captioner's own judgement, and why a fallback was used instead.
+        # All stay None on a step that never previewed.
+        self.last_preview_view_index: Optional[int] = None
+        self.last_preview_yaw_deg: Optional[float] = None
+        self.last_preview_selection: Optional[PreviewSelection] = None
+        self.last_preview_guard_reason: Optional[str] = None
         self.last_waypoint_guard_reason: Optional[str] = None
         self.last_waypoint_evidence: Optional[str] = None
         self.last_waypoint_confidence: Optional[float] = None
@@ -188,6 +202,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # into later model-selected waypoints.
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
+        # Preview views belong to the step that asked for them. Holding them
+        # past it would keep several images alive for the rest of the episode
+        # and let a later reader mistake them for this step's.
+        if isinstance(self.temporal_memory, GrowingCompletionMemory):
+            self.temporal_memory.clear_preview()
         current = (
             self.task_memory.get_current_subgoal()
             if self.task_memory is not None
@@ -254,6 +273,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             position = transform[:3, 3]
             self._force_left_turn_this_step = True
             self.last_recovery_mode = "NO_VALID_DEPTH"
+            # The model may have asked to preview, but the near-field obstacle
+            # has to be cleared before any surrounding view is worth taking.
+            self.last_waypoint_applied_action_mode = "EXECUTION"
             self.last_waypoint_guard_reason = (
                 "forced turn because depth has no valid walkable waypoint"
             )
@@ -277,6 +299,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 raw_response=(
                     f"{self.last_model_response}; no-valid-depth recovery"
                 ),
+                action_mode="EXECUTION",
             )
         if (
             self._force_forward_this_step
@@ -345,6 +368,150 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self.last_waypoint_stop_disposition = (
                 "accepted_final_evidence_guard"
             )
+            self.last_waypoint_applied_action_mode = "EXECUTION"
+            return NavigationDecision(
+                stop=True,
+                raw_response=(
+                    f"{decision.raw_response}; final target evidence guard"
+                ),
+            )
+        return decision
+
+    def act_on_preview(
+        self,
+        views: Sequence[PreviewView],
+        instruction: str,
+        *,
+        normalized_depth: bool = False,
+        depth_min_m: Optional[float] = None,
+        depth_max_m: Optional[float] = None,
+    ) -> NavigationDecision:
+        """Act on the surrounding views the controller rendered for a PREVIEW.
+
+        This is the second half of the step ``act`` began, not a new one.
+        Motion, the landmark tracker, and Temporal Memory were all advanced
+        there and deliberately do not run again: re-entering ``act`` would count
+        the same frame twice and record a stationary step as a stall.
+
+        The views are deposited in working memory, which is where the Captioner
+        judges which heading to take.  This agent only picks the floor point
+        inside whichever view comes back, with its ordinary waypoint policy.
+        """
+        started = time.perf_counter()
+        views = tuple(views)
+        if not views:
+            raise ValueError("resolving a preview requires at least one view")
+        unusable = [
+            index
+            for index, view in enumerate(views)
+            if not view.is_navigable
+        ]
+        if unusable:
+            raise ValueError(
+                "preview views {} lack depth, intrinsics, or a camera "
+                "transform, so a waypoint chosen in them could not be "
+                "back-projected".format(unusable)
+            )
+        # A previewed step selects a fresh action, so no forced primitive from
+        # the first half may leak into it.
+        self._force_forward_this_step = False
+        self._force_left_turn_this_step = False
+
+        view_index = self._selected_preview_view(views)
+        view = views[view_index]
+        self.last_preview_view_index = view_index
+        self.last_preview_yaw_deg = view.yaw_deg
+
+        image = self.actor.as_rgb_array(view.rgb)
+        select_started = time.perf_counter()
+        self._select_pixel(
+            image,
+            instruction,
+            subgoal_context=(
+                self.task_memory.current_subgoal_context()
+                if self.task_memory is not None
+                else ""
+            ),
+            # All three constrain this second pass within one step: the error
+            # votes and the recovery hold were already consumed by ``act``, the
+            # surrounding views are already in hand, and a turn would be
+            # measured against the agent's facing rather than the rotated view
+            # this decision was made in.
+            evaluate_recovery=False,
+            allow_preview=False,
+            allow_turn=False,
+        )
+        timings = {
+            "select_pixel_ms": (
+                time.perf_counter() - select_started
+            ) * 1000
+        }
+        # With previews and turns both refused above, the only outcome left is
+        # a waypoint inside the chosen view.
+        requested_uv = self.last_requested_pixel
+        assert requested_uv is not None
+
+        depth_m = self.actor.depth_in_meters(
+            view.depth,
+            image.shape[:2],
+            normalized=normalized_depth,
+            depth_min_m=depth_min_m,
+            depth_max_m=depth_max_m,
+        )
+        waypoint_started = time.perf_counter()
+        try:
+            point = self.actor.waypoint_from_pixel(
+                requested_uv,
+                depth_m,
+                view.intrinsics,
+                view.camera_to_world,
+            )
+        except ValueError as exc:
+            if str(exc) != (
+                "Depth observation contains no valid walkable waypoint."
+            ):
+                raise
+            # The chosen heading is blocked at very close range. Returning no
+            # point leaves the controller on its own recovery primitive, which
+            # is the same degradation a PREVIEW with no renderer gets.
+            self.last_recovery_mode = "NO_VALID_DEPTH"
+            self.last_waypoint_guard_reason = (
+                "previewed view {} has no valid walkable waypoint".format(
+                    view_index
+                )
+            )
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=False,
+                raw_response=(
+                    f"{self.last_model_response}; previewed view has no "
+                    "valid depth"
+                ),
+                action_mode=self._applied_action_mode(),
+            )
+        timings["waypoint_ms"] = (
+            time.perf_counter() - waypoint_started
+        ) * 1000
+        self._record_timings(timings, started)
+        decision = NavigationDecision(
+            stop=False,
+            point=point,
+            raw_response=self.last_model_response,
+            action_mode=self._applied_action_mode(),
+        )
+        # The PREVIEW half of this step cleared the near-target evidence, so
+        # run the guard here too; otherwise a previewed final approach could
+        # never accumulate the votes that end an episode.
+        current = (
+            self.task_memory.get_current_subgoal()
+            if self.task_memory is not None
+            else None
+        )
+        if self._should_stop_from_final_target_evidence(decision, current):
+            self.last_waypoint_stop_disposition = (
+                "accepted_final_evidence_guard"
+            )
+            self.last_waypoint_applied_action_mode = "EXECUTION"
             return NavigationDecision(
                 stop=True,
                 raw_response=(
@@ -398,6 +565,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # longer exists.
         if self.task_memory is not None and self.task_memory.is_task_complete():
             self.last_model_response = "all subgoals complete"
+            # This returns before ``_select_pixel`` clears the per-step waypoint
+            # state, so set the mode here rather than reporting the previous
+            # step's value alongside a terminal decision.
+            self.last_waypoint_applied_action_mode = "EXECUTION"
             self._record_timings(timings, started)
             return NavigationDecision(
                 stop=True,
@@ -418,7 +589,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # step's analysis, so waypoint selection steers by the subgoal this
         # step established rather than the previous step's.
         select_started = time.perf_counter()
-        requested_uv = self._select_pixel(
+        selected = self._select_pixel(
             image,
             instruction,
             subgoal_context=(
@@ -430,12 +601,27 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         timings["select_pixel_ms"] = (
             time.perf_counter() - select_started
         ) * 1000
-        if requested_uv is None:
+        if selected.action_mode == "PREVIEW":
+            # PREVIEW carries no action by design: the controller renders the
+            # surrounding views and calls back, so this is not a stop.
             self._record_timings(timings, started)
             return NavigationDecision(
-                stop=True,
+                stop=False,
                 raw_response=self.last_model_response,
+                action_mode="PREVIEW",
             )
+        if selected.is_turn:
+            # An in-place turn never reaches the RGB-D layer: there is no pixel
+            # to snap and no point to back-project.
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=False,
+                raw_response=self.last_model_response,
+                action_mode=self._applied_action_mode(),
+                turn_deg=selected.turn_deg,
+            )
+        requested_uv = self.last_requested_pixel
+        assert requested_uv is not None
         waypoint_started = time.perf_counter()
         point = self.actor.waypoint_from_pixel(
             requested_uv,
@@ -449,7 +635,53 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             stop=False,
             point=point,
             raw_response=self.last_model_response,
+            action_mode=self._applied_action_mode(),
         )
+
+    def _applied_action_mode(self) -> ActionMode:
+        """Return the mode this step actually asks the controller to take."""
+        return self.last_waypoint_applied_action_mode or "EXECUTION"
+
+    def _selected_preview_view(
+        self,
+        views: Sequence[PreviewView],
+    ) -> int:
+        """Deposit the views in working memory and read back the chosen one.
+
+        Depositing is what triggers the Captioner, so the selection is read
+        immediately afterwards.  When it declines — which it always does until
+        the Captioner side is implemented — fall back to the most forward view
+        and say so in the guard reason, so a placeholder is never mistaken for
+        a judgement in the logs.
+        """
+        forward_index = min(
+            range(len(views)),
+            key=lambda index: abs(views[index].yaw_deg),
+        )
+        self.last_preview_selection = None
+        # Kept apart from ``last_waypoint_guard_reason``: ``_select_pixel``
+        # clears that one on entry, and these are different guards anyway.
+        self.last_preview_guard_reason = None
+        if not isinstance(self.temporal_memory, GrowingCompletionMemory):
+            self.last_preview_guard_reason = (
+                "preview views discarded: working memory cannot hold them"
+            )
+            return forward_index
+
+        self.temporal_memory.set_preview_views(views)
+        selection = self.temporal_memory.preview_selection()
+        self.last_preview_selection = selection
+        if selection is not None:
+            return selection.view_index
+
+        error = self.temporal_memory.last_preview_error()
+        self.last_preview_guard_reason = (
+            "preview view selector failed ({}); used the most forward "
+            "view".format(error)
+            if error is not None
+            else "preview view selector declined; used the most forward view"
+        )
+        return forward_index
 
     def _record_timings(
         self,
@@ -827,6 +1059,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     def _rgb_to_png(self, rgb: np.ndarray) -> bytes:
         return self.actor.rgb_to_png(rgb)
 
+    def _as_rgb_array(self, rgb: Any) -> np.ndarray:
+        return self.actor.as_rgb_array(rgb)
+
     def _extract_json_object(self, response: str) -> dict[str, Any]:
         return self.actor.extract_json_object(response)
 
@@ -838,6 +1073,7 @@ __all__ = (
     "NavigationDecision",
     "NavigationPoint",
     "POINT_PROMPT",
+    "PreviewView",
     "Subgoal",
     "SUBGOAL_PROMPT",
     "VLNAgent",

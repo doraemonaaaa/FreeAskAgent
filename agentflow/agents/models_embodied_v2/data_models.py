@@ -15,6 +15,20 @@ ErrorMode = Literal[
 ]
 LandmarkDirection = Literal["LEFT", "CENTER", "RIGHT", "UNKNOWN"]
 LandmarkProximity = Literal["FAR", "NEAR", "AT", "UNKNOWN"]
+# What the actor is asking the controller to do with this step.  ``EXECUTION``
+# is the pre-existing behaviour: commit to the returned waypoint.  ``PREVIEW``
+# asks the runner for surrounding views before committing, and ``EXPLORATION``
+# commits to a waypoint chosen to reveal the route rather than to advance along
+# one already known.  A waypoint is returned in every mode, so a controller that
+# cannot render surrounding views still has a usable action.
+ActionMode = Literal["PREVIEW", "EXPLORATION", "EXECUTION"]
+# One simulator turn primitive.  This must match Habitat's
+# ``habitat.simulator.turn_angle``: a requested turn is executed as whole
+# repeats of that primitive, so a mismatch would silently round every turn.
+TURN_STEP_DEG = 15
+# Beyond half a circle the other direction is always shorter, and at 15 degrees
+# a step, 180 degrees already costs twelve of them.
+MAX_TURN_DEG = 180
 
 
 class TemporalInputError(ValueError):
@@ -280,7 +294,107 @@ class NavigationPoint:
 
 
 @dataclass(frozen=True, slots=True)
+class PreviewView:
+    """One surrounding view rendered in answer to a PREVIEW decision.
+
+    ``yaw_deg`` is the heading offset from the agent's current facing.  Depth,
+    intrinsics, and the camera transform belong to this view rather than to the
+    forward camera, so a pixel chosen inside it back-projects in its own frame
+    with no change to the RGB-D layer.
+    """
+
+    yaw_deg: float
+    rgb: Any = field(repr=False)
+    depth: Any = field(default=None, repr=False)
+    intrinsics: Any = None
+    camera_to_world: Any = None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.yaw_deg, bool)
+            or not isinstance(self.yaw_deg, (int, float))
+            or not math.isfinite(float(self.yaw_deg))
+        ):
+            raise ValueError("yaw_deg must be a finite number")
+        object.__setattr__(self, "yaw_deg", float(self.yaw_deg))
+        if self.rgb is None:
+            raise ValueError("a preview view requires an RGB image")
+
+    @property
+    def is_navigable(self) -> bool:
+        """True when this view carries everything a waypoint needs."""
+        return (
+            self.depth is not None
+            and self.intrinsics is not None
+            and self.camera_to_world is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewSelection:
+    """Which held preview view the actor should act on.
+
+    The Captioner chooses the heading and nothing else: the actor still picks
+    the floor point inside that view with its ordinary waypoint policy, so the
+    corridor lock and the STOP deferral keep applying unchanged.
+    """
+
+    view_index: int
+    confidence: float = 0.0
+    evidence: str = ""
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.view_index, bool)
+            or not isinstance(self.view_index, int)
+            or self.view_index < 0
+        ):
+            raise ValueError("view_index must be a non-negative integer")
+        if (
+            isinstance(self.confidence, bool)
+            or not isinstance(self.confidence, (int, float))
+            or not math.isfinite(float(self.confidence))
+            or not 0.0 <= float(self.confidence) <= 1.0
+        ):
+            raise ValueError("confidence must be a number in [0, 1]")
+        object.__setattr__(self, "confidence", float(self.confidence))
+        if not isinstance(self.evidence, str):
+            raise ValueError("evidence must be a string")
+
+
+@dataclass(frozen=True, slots=True)
 class NavigationDecision:
     stop: bool
     point: NavigationPoint | None = None
     raw_response: str | None = None
+    # Defaults to EXECUTION so a controller written before action modes existed
+    # keeps its behaviour of committing to ``point`` unconditionally.
+    action_mode: ActionMode = "EXECUTION"
+    # Signed whole turn primitives, positive to the right.  Set instead of
+    # ``point`` when the step rotates in place.
+    turn_deg: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.turn_deg is None:
+            return
+        # Checked at the boundary the controller reads: it divides by the turn
+        # primitive to count repeats, so a value that is not a whole multiple
+        # would be silently truncated into a shorter turn than was asked for.
+        if isinstance(self.turn_deg, bool) or not isinstance(
+            self.turn_deg, int
+        ):
+            raise ValueError("turn_deg must be an integer")
+        if self.turn_deg == 0:
+            raise ValueError("a turn must not be zero degrees")
+        if self.turn_deg % TURN_STEP_DEG:
+            raise ValueError(
+                f"turn_deg must be a multiple of {TURN_STEP_DEG} degrees"
+            )
+        if abs(self.turn_deg) > MAX_TURN_DEG:
+            raise ValueError(
+                f"turn_deg must be within +/-{MAX_TURN_DEG} degrees"
+            )
+        if self.point is not None:
+            raise ValueError("a decision is either a turn or a point")
+        if self.stop:
+            raise ValueError("a stopping decision cannot also turn")

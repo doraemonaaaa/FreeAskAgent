@@ -28,6 +28,7 @@ from .protocol import (
     VLM_IMAGE_MIN_PIXELS,
     WAYPOINT_GENERATION_ATTEMPTS,
     NavigationIntent,
+    parse_actor_output,
     WaypointOutput as _WaypointOutput,
 )
 
@@ -159,19 +160,53 @@ class WaypointPolicyMixin:
         instruction: str,
         *,
         subgoal_context: str = "",
-    ) -> Optional[tuple[int, int]]:
-        """Defer model STOP until memory or repeated near-target evidence."""
+        evaluate_recovery: bool = True,
+        allow_preview: bool = True,
+        allow_turn: bool = True,
+    ) -> _WaypointOutput:
+        """Return this step's decision, with model STOP deferred.
+
+        The decision itself is returned rather than a pixel, because a step can
+        resolve three different ways — a waypoint, an in-place turn, or a
+        request to preview — and only the first has coordinates.  When it is a
+        waypoint, ``last_requested_pixel`` holds the pixel it maps to.
+
+        ``evaluate_recovery`` is False on the second call within one step, as a
+        previewed step makes: the error-vote window and the recovery hold
+        counter are both per-step, so evaluating twice would cast two votes for
+        one observation and burn a hold step early.
+
+        ``allow_preview`` is False once the surrounding views are already in
+        hand, or a previewed step could ask to preview again and loop the
+        controller.
+
+        ``allow_turn`` is False in that same pass: a turn executes against the
+        agent's real facing, but the decision was made while looking at a
+        rotated view, so the two would mean different headings.
+        """
         self.last_requested_pixel = None
         self.last_requested_normalized = None
+        self.last_requested_turn_deg = None
         self.last_waypoint_raw_response = None
         self.last_waypoint_stop_disposition = None
         self.last_waypoint_model_intent = None
         self.last_waypoint_applied_intent = None
+        self.last_waypoint_model_action_mode = None
+        self.last_waypoint_applied_action_mode = None
         self.last_waypoint_guard_reason = None
         self.last_waypoint_evidence = None
         self.last_waypoint_confidence = None
-        recovery_mode = self._recovery_mode_for_step()
-        self.last_recovery_mode = recovery_mode
+        recovery_mode = (
+            self._recovery_mode_for_step() if evaluate_recovery else None
+        )
+        if evaluate_recovery:
+            self.last_recovery_mode = recovery_mode
+            # Only the first call of a step clears these, so the view a
+            # previewed step commits to survives into the debug payload.
+            self.last_preview_view_index = None
+            self.last_preview_yaw_deg = None
+            self.last_preview_selection = None
+            self.last_preview_guard_reason = None
         current = (
             self.task_memory.get_current_subgoal()
             if self.task_memory is not None
@@ -201,6 +236,9 @@ class WaypointPolicyMixin:
             synthetic = _WaypointOutput(
                 stop=False,
                 intent=intent,
+                # A confirmed recovery is a forced deterministic action; there
+                # is nothing for the controller to preview or explore first.
+                action_mode="EXECUTION",
                 u=RECOVERY_FORWARD_U if force_forward else RECOVERY_TURN_U,
                 v=RECOVERY_FORWARD_V if force_forward else RECOVERY_TURN_V,
                 confidence=1.0,
@@ -210,6 +248,8 @@ class WaypointPolicyMixin:
             self.last_waypoint_raw_response = self.last_model_response
             self.last_waypoint_model_intent = intent
             self.last_waypoint_applied_intent = intent
+            self.last_waypoint_model_action_mode = synthetic.action_mode
+            self.last_waypoint_applied_action_mode = synthetic.action_mode
             self.last_waypoint_evidence = evidence
             self.last_waypoint_confidence = synthetic.confidence
             self.last_waypoint_guard_reason = (
@@ -226,7 +266,7 @@ class WaypointPolicyMixin:
             )
             self._force_forward_this_step = force_forward
             self._force_left_turn_this_step = not force_forward
-            return self.last_requested_pixel
+            return synthetic
         prompt = "\n".join(
             (
                 subgoal_context
@@ -248,6 +288,14 @@ class WaypointPolicyMixin:
                 "coordinate system.",
                 f"Displayed image width: {width}; height: {height}.",
             )
+        )
+        # A PREVIEW reply carries no navigation intent, and the flat internal
+        # form still needs one; the required phase is the honest answer, except
+        # that STOP is not a steering intent.
+        safe_phase: NavigationIntent = (
+            self._navigation_phase
+            if self._navigation_phase != "STOP"
+            else "FINAL_APPROACH"
         )
         last_error: Optional[Exception] = None
         response: Any = ""
@@ -272,19 +320,20 @@ class WaypointPolicyMixin:
                 payload = self._extract_json_object(
                     self.last_model_response
                 )
-                waypoint = _WaypointOutput.model_validate(payload)
+                waypoint = parse_actor_output(
+                    payload,
+                    preview_intent=safe_phase,
+                )
                 break
             except Exception as exc:
                 last_error = exc
         else:
-            fallback_intent: NavigationIntent = (
-                self._navigation_phase
-                if self._navigation_phase != "STOP"
-                else "FINAL_APPROACH"
-            )
             waypoint = _WaypointOutput(
                 stop=False,
-                intent=fallback_intent,
+                intent=safe_phase,
+                # The reply that would have carried a mode is the thing that
+                # failed validation, so fall back to committing to the point.
+                action_mode="EXECUTION",
                 u=500,
                 v=750,
                 confidence=0.0,
@@ -304,8 +353,53 @@ class WaypointPolicyMixin:
     
         self.last_waypoint_model_intent = waypoint.intent
         self.last_waypoint_applied_intent = waypoint.intent
+        # The corridor lock and the STOP deferral below rewrite where the agent
+        # goes, not whether it should look around first, so the applied mode
+        # only diverges from the model's when a guard forces an action.
+        self.last_waypoint_model_action_mode = waypoint.action_mode
+        self.last_waypoint_applied_action_mode = waypoint.action_mode
         self.last_waypoint_evidence = waypoint.evidence
         self.last_waypoint_confidence = waypoint.confidence
+        if waypoint.action_mode == "PREVIEW":
+            if allow_preview:
+                # PREVIEW deliberately carries no action: the controller renders
+                # the surrounding views and calls back. The guards below rewrite
+                # where the agent goes, so they have nothing to act on here.
+                self.last_waypoint_guard_reason = (
+                    "preview requested; no action produced this step"
+                )
+                return waypoint
+            # The views are already in hand, so asking again would loop the
+            # controller. Commit to a safe waypoint in the chosen view instead.
+            waypoint = waypoint.model_copy(
+                update={"action_mode": "EXECUTION", "u": 500, "v": 750}
+            )
+            self.last_waypoint_applied_action_mode = "EXECUTION"
+            self.last_waypoint_guard_reason = (
+                "preview requested again after the views were provided; "
+                "committed to a safe waypoint instead"
+            )
+        if waypoint.is_turn and not allow_turn:
+            # Committing to a point inside the chosen view is the unambiguous
+            # way to face that heading; the follower turns to reach it.
+            safe_intent: NavigationIntent = (
+                self._navigation_phase
+                if self._navigation_phase != "STOP"
+                else "FINAL_APPROACH"
+            )
+            waypoint = waypoint.model_copy(
+                update={
+                    "intent": safe_intent,
+                    "turn_deg": None,
+                    "u": 500,
+                    "v": 750,
+                }
+            )
+            self.last_waypoint_applied_intent = safe_intent
+            self.last_waypoint_guard_reason = (
+                "turn requested while resolving a preview; committed to a "
+                "waypoint inside the chosen view instead"
+            )
         required_turn = None
         if current is not None:
             turn_match = re.search(
@@ -342,13 +436,21 @@ class WaypointPolicyMixin:
                 or self._turn_follow_phase_started
             )
             and recovery_mode is None
+            # Resolving a preview releases the lock. Asking to look around is
+            # the agent saying the corridor heading no longer resolves the
+            # route, and re-centring inside a rotated view would command the
+            # very turn this guard exists to block.
+            and allow_preview
         ):
-            assert waypoint.u is not None
-            if (
-                waypoint.intent != "FOLLOW_CORRIDOR"
-                or abs(waypoint.u - 500)
-                > CORRIDOR_WAYPOINT_DEVIATION
-            ):
+            # An explicit turn is a side turn by definition, so it faces the
+            # same guard as a side waypoint. Ordering matters: a turn carries
+            # no ``u`` to compare.
+            deviates = (
+                waypoint.is_turn
+                or waypoint.intent != "FOLLOW_CORRIDOR"
+                or abs(waypoint.u - 500) > CORRIDOR_WAYPOINT_DEVIATION
+            )
+            if deviates:
                 if allow_required_turn:
                     self.last_waypoint_guard_reason = (
                         "released corridor lock at the measured next-turn "
@@ -362,7 +464,11 @@ class WaypointPolicyMixin:
                     waypoint = waypoint.model_copy(
                         update={
                             "intent": "FOLLOW_CORRIDOR",
+                            "turn_deg": None,
                             "u": 500,
+                            # A blocked turn has no v of its own, so the safe
+                            # lower-centre row stands in for it.
+                            "v": 750 if waypoint.v is None else waypoint.v,
                         }
                     )
                     self.last_waypoint_applied_intent = "FOLLOW_CORRIDOR"
@@ -399,6 +505,15 @@ class WaypointPolicyMixin:
                 f"{self.last_model_response} [STOP deferred]"
             )
 
+        if waypoint.is_turn:
+            # An in-place turn has no image coordinates: the controller repeats
+            # the simulator's turn primitive instead of steering to a point.
+            self.last_requested_turn_deg = waypoint.turn_deg
+            self.last_waypoint_raw_response = (
+                self.last_waypoint_raw_response or self.last_model_response
+            )
+            return waypoint
+
         assert waypoint.u is not None and waypoint.v is not None
         self.last_requested_normalized = (waypoint.u, waypoint.v)
         self.last_requested_pixel = (
@@ -408,7 +523,7 @@ class WaypointPolicyMixin:
         self.last_waypoint_raw_response = self.last_waypoint_raw_response or (
             self.last_model_response
         )
-        return self.last_requested_pixel
+        return waypoint
     
     @staticmethod
     def _scale_normalized(value: int, size: int) -> int:

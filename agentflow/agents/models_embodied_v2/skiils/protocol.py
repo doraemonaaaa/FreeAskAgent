@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
+
+from agentflow.agents.models_embodied_v2.data_models import (
+    ActionMode,
+    MAX_TURN_DEG,
+    TURN_STEP_DEG,
+)
 
 
 DEFAULT_MODEL_PATH = "models/JoyAI-VL-Interaction"
@@ -43,7 +56,12 @@ RECENT_COMPLETION_EVIDENCE_FRAMES = 8
 VLM_IMAGE_MIN_PIXELS = 64**2
 VLM_IMAGE_MAX_PIXELS = 224**2
 TEMPORAL_MAX_IMAGE_EDGE = 160
-STRUCTURED_VLM_MAX_TOKENS = 64
+# The actor schema is now a nested discriminated union, which costs roughly
+# twenty-five more tokens per reply than the flat waypoint shape.  At the
+# previous 64-token budget a typical reply would truncate before its closing
+# braces, and a truncated reply fails validation and silently degrades into the
+# safe fallback waypoint.  A PREVIEW reply is far shorter and ends early.
+STRUCTURED_VLM_MAX_TOKENS = 96
 # The landmark schema is the longest of the structured outputs, and adding the
 # u/v pair pushes a typical reply past the shared 64-token budget, which would
 # truncate the JSON before its closing brace and fail validation.
@@ -69,25 +87,47 @@ NavigationIntent = Literal[
     "STOP",
 ]
 
-POINT_PROMPT = """You are an indoor navigation waypoint selector. Steer only
-toward the active navigation subgoal. Select one visible, obstacle-free floor
-point that makes progress. Never select walls, furniture, stairs, or an image
-border.
+POINT_PROMPT = """You are an indoor navigation actor. Steer only toward the
+active navigation subgoal.
 
-First choose a navigation intent, then a waypoint consistent with it:
+First decide this step's action mode, and write it as the first field:
+- EXECUTION: the current image resolves where to go; commit to a waypoint.
+- EXPLORATION: the direction is unresolved, but a visible floor path would
+  reveal it; move to gather information rather than to advance a known route.
+- PREVIEW: the current image cannot resolve the direction and the answer is
+  likely outside this field of view; ask to inspect the surrounding views.
+Prefer EXECUTION. Choose PREVIEW only when looking around is the only way to
+make progress: it returns no motion and costs a step.
+
+EXECUTION and EXPLORATION also need a navigation intent:
 - FOLLOW_CORRIDOR: continue through the main corridor; do not enter side rooms.
 - APPROACH_LANDMARK: approach the active subgoal's visible landmark.
 - TURN_LEFT / TURN_RIGHT: execute the active subgoal's requested turn.
 - FINAL_APPROACH: approach the final destination.
-- STOP: stop only at the final destination.
+- STOP: EXECUTION only, and only at the final destination.
 
-Coordinates are normalized integers from 0 to 1000, independent of image
-resolution: u=0 is the left edge, u=1000 is the right edge, v=0 is the top,
-and v=1000 is the bottom. Reply only with one exact JSON object:
-{"stop":false,"intent":"FOLLOW_CORRIDOR","u":integer,"v":integer,"confidence":0.0,"evidence":"brief visual reason"}.
+An EXECUTION is either a waypoint or a turn, never both. Give a waypoint
+whenever a usable floor point is visible. Ask for a turn only when the way
+forward is not visible from here and rotating will bring it into view.
 
-The target may be one subgoal of a longer route, numbered "(n of m)". Reply
-{"stop":true,"intent":"STOP","confidence":0.0,"evidence":"brief visual reason"}
+Select one visible, obstacle-free floor point that makes progress. Never select
+walls, furniture, stairs, or an image border. Coordinates are normalized
+integers from 0 to 1000, independent of image resolution: u=0 is the left edge,
+u=1000 is the right edge, v=0 is the top, and v=1000 is the bottom.
+
+turn_deg is a multiple of 15: positive turns right, negative turns left. It must
+agree with the intent, so TURN_RIGHT takes a positive value and TURN_LEFT a
+negative one. Every 15 degrees costs one step, so ask for the smallest turn that
+does the job.
+
+Reply only with one exact JSON object, in one of these four shapes:
+{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"FOLLOW_CORRIDOR","u":integer,"v":integer},"confidence":0.0,"evidence":"brief visual reason"}
+{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"TURN_RIGHT","turn_deg":30},"confidence":0.0,"evidence":"brief visual reason"}
+{"action_mode":"EXPLORATION","exploration":{"intent":"APPROACH_LANDMARK","u":integer,"v":integer},"confidence":0.0,"evidence":"brief visual reason"}
+{"action_mode":"PREVIEW","preview":true,"confidence":0.0,"evidence":"brief visual reason"}
+
+The target may be one subgoal of a longer route, numbered "(n of m)". Use
+{"action_mode":"EXECUTION","execution":{"stop":true,"intent":"STOP"},"confidence":0.0,"evidence":"brief visual reason"}
 only when the active subgoal is final and the destination is at immediate
 stopping distance. A STOP response is a proposal: the controller requires
 repeated near-field evidence or completed Task Memory before issuing Habitat
@@ -101,7 +141,7 @@ would circle or pass a target already beside the camera, propose STOP."""
 
 SUBGOAL_PROMPT = """You are an indoor navigation task planner. Decompose the
 instruction into a short ordered list of stages. Write one stage per line in
-exactly this form, and output nothing else — no JSON, no brackets, no bullets,
+exactly this form, and output nothing else 鈥?no JSON, no brackets, no bullets,
 no commentary, no blank lines:
 id|description|completion criterion
 
@@ -211,14 +251,28 @@ class SubgoalPlanOutput(BaseModel):
 
 
 class WaypointOutput(BaseModel):
+    """Flat internal form of one actor decision.
+
+    The wire format is the nested ``ActorOutput`` union below.  Keeping this
+    flat shape as the internal one means the guards, the recovery path, and the
+    debug state are unaffected by the nesting.
+    """
+
     model_config = ConfigDict(extra="forbid", strict=True)
 
     stop: bool
     intent: NavigationIntent
+    action_mode: ActionMode = "EXECUTION"
     u: Optional[int] = None
     v: Optional[int] = None
+    turn_deg: Optional[int] = None
     confidence: float
     evidence: str
+
+    @property
+    def is_turn(self) -> bool:
+        """True when this decision rotates in place instead of moving to a point."""
+        return self.turn_deg is not None
 
     @model_validator(mode="after")
     def valid_stop_or_point(self) -> "WaypointOutput":
@@ -227,22 +281,216 @@ class WaypointOutput(BaseModel):
         self.evidence = self.evidence.strip()
         if not self.evidence:
             raise ValueError("evidence must not be empty")
+        for value in (self.u, self.v):
+            if value is not None and not 0 <= value <= 1000:
+                raise ValueError(
+                    "normalized coordinates must be in [0, 1000]"
+                )
         if self.stop:
             if self.intent != "STOP":
                 raise ValueError("STOP output requires intent=STOP")
-            for value in (self.u, self.v):
-                if value is not None and not 0 <= value <= 1000:
-                    raise ValueError(
-                        "normalized coordinates must be in [0, 1000]"
-                    )
+            # Stopping is terminal, so there is nothing left to preview or
+            # explore towards.
+            if self.action_mode != "EXECUTION":
+                raise ValueError("STOP output requires action_mode=EXECUTION")
+            if self.turn_deg is not None:
+                raise ValueError("a stopping output cannot also turn")
             return self
         if self.intent == "STOP":
             raise ValueError("non-STOP output cannot use intent=STOP")
+        if self.action_mode == "PREVIEW":
+            # PREVIEW asks the controller for surrounding views and carries no
+            # action of its own, neither a waypoint nor a turn.
+            if self.turn_deg is not None:
+                raise ValueError("a PREVIEW output cannot carry a turn")
+            return self
+        if self.turn_deg is not None:
+            if self.u is not None or self.v is not None:
+                raise ValueError(
+                    "an output is either a turn or a waypoint, not both"
+                )
+            _validate_turn(self.turn_deg, self.intent)
+            return self
         if self.u is None or self.v is None:
-            raise ValueError("non-STOP output requires u and v")
-        if not 0 <= self.u <= 1000 or not 0 <= self.v <= 1000:
-            raise ValueError("normalized coordinates must be in [0, 1000]")
+            raise ValueError("a committing output requires u and v")
         return self
+
+
+def _validate_normalized(u: int, v: int) -> None:
+    for value in (u, v):
+        if not 0 <= value <= 1000:
+            raise ValueError("normalized coordinates must be in [0, 1000]")
+
+
+def _validate_turn(turn_deg: int, intent: NavigationIntent) -> None:
+    """Bound a turn to whole turn primitives and to its stated direction.
+
+    The direction check is not redundant with the sign: the guards read
+    ``intent`` while the controller executes ``turn_deg``, so a reply that
+    disagrees with itself would turn one way and be judged as the other.
+    """
+    if turn_deg == 0:
+        raise ValueError("a turn must not be zero degrees")
+    if turn_deg % TURN_STEP_DEG:
+        raise ValueError(
+            f"turn_deg must be a multiple of {TURN_STEP_DEG} degrees"
+        )
+    if abs(turn_deg) > MAX_TURN_DEG:
+        raise ValueError(
+            f"turn_deg must be within +/-{MAX_TURN_DEG} degrees"
+        )
+    expected = "TURN_RIGHT" if turn_deg > 0 else "TURN_LEFT"
+    if intent != expected:
+        raise ValueError(f"turn_deg {turn_deg:+d} requires intent={expected}")
+
+
+class ExecutionProposal(BaseModel):
+    """Commit to a waypoint, or stop at the final destination."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    stop: bool
+    intent: NavigationIntent
+    u: Optional[int] = None
+    v: Optional[int] = None
+    # Signed whole turn primitives: positive turns right, negative left.  A
+    # turn and a waypoint are alternatives, never a pair, because the
+    # controller can only execute one of them per decision.
+    turn_deg: Optional[int] = None
+
+    @model_validator(mode="after")
+    def valid_proposal(self) -> "ExecutionProposal":
+        if self.stop:
+            if self.intent != "STOP":
+                raise ValueError("a stopping execution requires intent=STOP")
+            if self.turn_deg is not None:
+                raise ValueError("a stopping execution cannot also turn")
+            return self
+        if self.intent == "STOP":
+            raise ValueError("a moving execution cannot use intent=STOP")
+        if self.turn_deg is not None:
+            if self.u is not None or self.v is not None:
+                raise ValueError(
+                    "an execution is either a turn or a waypoint, not both"
+                )
+            _validate_turn(self.turn_deg, self.intent)
+            return self
+        if self.u is None or self.v is None:
+            raise ValueError("a moving execution requires u and v")
+        _validate_normalized(self.u, self.v)
+        return self
+
+
+class ExplorationProposal(BaseModel):
+    """Move to reveal the route rather than to advance a known one."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    intent: NavigationIntent
+    u: int
+    v: int
+
+    @model_validator(mode="after")
+    def valid_proposal(self) -> "ExplorationProposal":
+        # Exploration is never terminal; stopping belongs to EXECUTION.
+        if self.intent == "STOP":
+            raise ValueError("exploration cannot use intent=STOP")
+        _validate_normalized(self.u, self.v)
+        return self
+
+
+class _ActorOutputBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    confidence: float
+    evidence: str
+
+    @model_validator(mode="after")
+    def valid_common(self) -> "_ActorOutputBase":
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("confidence must be between 0 and 1")
+        self.evidence = self.evidence.strip()
+        if not self.evidence:
+            raise ValueError("evidence must not be empty")
+        return self
+
+
+class ExecutionOutput(_ActorOutputBase):
+    action_mode: Literal["EXECUTION"]
+    execution: ExecutionProposal
+
+
+class ExplorationOutput(_ActorOutputBase):
+    action_mode: Literal["EXPLORATION"]
+    exploration: ExplorationProposal
+
+
+class PreviewOutput(_ActorOutputBase):
+    action_mode: Literal["PREVIEW"]
+    preview: bool
+
+    @model_validator(mode="after")
+    def valid_request(self) -> "PreviewOutput":
+        if not self.preview:
+            raise ValueError("PREVIEW output requires preview=true")
+        return self
+
+
+# ``action_mode`` is the discriminator and is written first in the prompt's
+# templates on purpose: decoding is autoregressive, so the mode is committed
+# before any waypoint is generated, and a PREVIEW reply ends early instead of
+# emitting coordinates nobody will use.
+ActorOutput = Annotated[
+    Union[ExecutionOutput, ExplorationOutput, PreviewOutput],
+    Field(discriminator="action_mode"),
+]
+
+ACTOR_OUTPUT_ADAPTER: TypeAdapter = TypeAdapter(ActorOutput)
+
+
+def parse_actor_output(
+    payload: dict,
+    *,
+    preview_intent: NavigationIntent,
+) -> WaypointOutput:
+    """Validate the nested wire format and flatten it for the policy code.
+
+    ``preview_intent`` supplies the navigation intent a PREVIEW reply does not
+    carry, so the flat form stays well-formed for the debug state and guards.
+    """
+    output = ACTOR_OUTPUT_ADAPTER.validate_python(payload)
+    if isinstance(output, PreviewOutput):
+        if preview_intent == "STOP":
+            raise ValueError("preview_intent must not be STOP")
+        return WaypointOutput(
+            stop=False,
+            intent=preview_intent,
+            action_mode="PREVIEW",
+            confidence=output.confidence,
+            evidence=output.evidence,
+        )
+    return _flatten_proposal(output)
+
+
+def _flatten_proposal(
+    output: "ExecutionOutput | ExplorationOutput",
+) -> WaypointOutput:
+    proposal = (
+        output.execution
+        if isinstance(output, ExecutionOutput)
+        else output.exploration
+    )
+    return WaypointOutput(
+        stop=getattr(proposal, "stop", False),
+        intent=proposal.intent,
+        action_mode=output.action_mode,
+        u=proposal.u,
+        v=proposal.v,
+        # Exploration is waypoint-only, so only an execution can carry a turn.
+        turn_deg=getattr(proposal, "turn_deg", None),
+        confidence=output.confidence,
+        evidence=output.evidence,
+    )
 
 
 class LandmarkOutput(BaseModel):
