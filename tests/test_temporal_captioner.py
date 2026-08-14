@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 from PIL import Image
 
-from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
+from agentflow.agents.models_embodied_v2.memory.temporal_memory.temporal_captioner import (
     Subgoal,
     TemporalAnalysisRequest,
     TemporalCaptioner,

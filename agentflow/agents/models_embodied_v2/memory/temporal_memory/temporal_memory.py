@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import copy
 from collections import deque
 from dataclasses import asdict, replace
-from typing import Any, Deque, Optional, Protocol, Sequence
+from typing import Any, Deque, Optional, Sequence
 
-from ..TemporalCaptioner import (
+from .temporal_captioner import (
     CaptionResult,
     ErrorMode,
     Subgoal,
@@ -15,7 +14,9 @@ from ..TemporalCaptioner import (
     TemporalCaptioner,
     TemporalFrameInput,
 )
-from ..data_models import (
+from .interfaces import TaskMemoryPort, TemporalCaptionerPort
+from .frame_history import copy_image
+from ...data_models import (
     MemoryFrame,
     TemporalEvent,
     TemporalEventKind,
@@ -31,36 +32,7 @@ class TemporalStateError(TemporalMemoryError):
     pass
 
 
-class TaskMemoryPort(Protocol):
-    def reset(
-        self,
-        *,
-        goal: str,
-        task_guidance: str = "",
-        subgoals: Sequence[Any] = (),
-    ) -> None: ...
-
-    def get_task(self) -> str: ...
-
-    def get_current_subgoal(self) -> Optional[Subgoal]: ...
-
-    def get_latest_observation(self) -> Any: ...
-
-    def get_reset_generation(self) -> int: ...
-
-    def publish_temporal_event(self, event: TemporalEvent) -> None: ...
-
-
-def _image_copy(image: Any) -> Any:
-    if image is None:
-        raise TemporalStateError("image must not be None")
-    if isinstance(image, bytes):
-        return image
-    copier = getattr(image, "copy", None)
-    return copier() if callable(copier) else copy.deepcopy(image)
-
-
-class TemporalMemory:
+class _BaseTemporalMemory:
     """Analyze the sliding window on every new frame and publish its events.
 
     The window holds at most eight frames, but analysis runs as soon as Task
@@ -70,7 +42,7 @@ class TemporalMemory:
     def __init__(
         self,
         *,
-        captioner: TemporalCaptioner,
+        captioner: TemporalCaptionerPort,
         task_memory: TaskMemoryPort,
         config: Optional[TemporalMemoryConfig] = None,
     ) -> None:
@@ -163,9 +135,11 @@ class TemporalMemory:
         self._sync_task_state()
         if self._subgoal is None:
             raise TemporalStateError("current subgoal is not set")
+        if image is None:
+            raise TemporalStateError("image must not be None")
         frame = MemoryFrame(
             frame_id=self._next_frame_id,
-            image=_image_copy(image),
+            image=copy_image(image),
             subgoal_id=self._subgoal.subgoal_id,
         )
         self._frames.append(frame)
@@ -272,44 +246,9 @@ class TemporalMemory:
         self._subgoal = current
 
     def _store(self, result: CaptionResult) -> CaptionResult:
-        assert self._subgoal is not None
-        if result.subgoal_id != self._subgoal.subgoal_id:
-            raise TemporalStateError("Captioner returned the wrong subgoal")
+        from .event_publisher import store
 
-        # Error events are produced exclusively by the configured temporal
-        # captioner.  A local image-similarity heuristic can turn ordinary
-        # repeated corridor views into false ``GET_NOWHERE`` events and must
-        # not override the dual-window judgement.
-        if self.config.enable_error_detection:
-            if result.error != (result.error_mode != "NONE"):
-                raise TemporalStateError(
-                    "Captioner returned inconsistent error fields"
-                )
-        else:
-            result = replace(result, error=False, error_mode="NONE")
-
-        self._latest_result = result
-        self._last_error = None
-        self._last_analyzed_frame = self._frames[-1].frame_id
-
-        if self.config.enable_error_detection:
-            self._publish(
-                TemporalEvent(
-                    kind=TemporalEventKind.ERROR,
-                    value=result.error,
-                    subgoal_id=result.subgoal_id,
-                    error_mode=result.error_mode,
-                )
-            )
-        self._publish(
-            TemporalEvent(
-                kind=TemporalEventKind.SUBGOAL_COMPLETED,
-                value=result.completed,
-                subgoal_id=result.subgoal_id,
-                error_mode=result.error_mode,
-            )
-        )
-        return result
+        return store(self, result)
 
     def _detect_error_mode(self) -> ErrorMode:
         """Detect cumulative errors from the visual sequence only."""
@@ -408,6 +347,13 @@ def _visual_distance(first: Any, second: Any) -> float:
     import numpy as np
 
     return float(np.mean(np.abs(first - second)))
+
+
+from .completion_judge import CompletionMemoryMixin
+
+
+class TemporalMemory(CompletionMemoryMixin, _BaseTemporalMemory):
+    """Growing temporal evidence, completion judgement, and event publishing."""
 
 
 __all__ = (

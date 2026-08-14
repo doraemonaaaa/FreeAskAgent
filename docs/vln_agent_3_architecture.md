@@ -43,7 +43,7 @@ RGB-D observation + camera pose
 | --- | --- | --- |
 | 子目标生成 | 一次生成并进行基本 JSON 解析。 | 生成失败时最多重试一次；以 Pydantic 严格校验字段、非空文本和从 `1` 开始的连续唯一 ID，并修正无依据的环路要求和非最终 `stop` 条件。 |
 | 子目标语义 | 计划可描述视觉完成条件，但没有专门的转向决策点规范化。 | 对“先直行、再在某处转向”的指令，将直行阶段对齐到下一转向的决策点，避免把“正在靠近”误认为完成。 |
-| 时序记忆 | 标准 `TemporalMemory` 最多保留 8 帧，默认仅输出完成判断。 | `GrowingCompletionMemory` 为当前子目标积累观测；每次调用至多选择 9 帧代表证据完成判断，另取其中最近 8 帧进行错误诊断。 |
+| 时序记忆 | 标准 `TemporalMemory` 最多保留 8 帧，默认仅输出完成判断。 | 统一 `TemporalMemory` 为当前子目标积累观测；每次调用至多选择 9 帧代表证据完成判断，另取其中最近 8 帧进行错误诊断。 |
 | 时序证据 | 图像帧为主。 | 每帧额外记录实测平移、偏航变化、子目标内累计路径长度以及地标状态，作为视觉判断的辅助证据。 |
 | 完成判定 | VLM 判断直接驱动状态。 | 视觉完成判断还受门槛穿越、决策点到达、净转角等运动条件校验；只有匹配活动子目标的正完成事件才会推进计划。 |
 | 地标理解 | 没有独立地标状态。 | 新增地标跟踪器，输出可见性、相对方向、距离层级、是否通过、目标区域是否主导画面、置信度和依据。 |
@@ -81,7 +81,7 @@ RGB-D observation + camera pose
 
 ### 4.2 带双窗口的 Temporal Memory
 
-v3 使用 `GrowingCompletionMemory` 替代 v2 的固定 8 帧 `TemporalMemory`。在一个活动子目标内，它持续记录帧；每个帧附有：
+v3 使用统一的增长式 `TemporalMemory` 替代 v2 的固定 8 帧实现。在一个活动子目标内，它持续记录帧；每个帧附有：
 
 - `translation_m`：相邻观测间从相机位姿得到的实测平移；
 - `yaw_delta_deg`：相邻观测间的实测偏航变化；
@@ -103,7 +103,7 @@ error window:      recent suffix of the completion window, at most 8
 
 ### 4.3 视觉完成判断的运动校验
 
-Temporal Captioner 的视觉输出不是唯一决定因素。`GrowingCompletionMemory` 对三类容易被单帧误判的阶段增加运动约束：
+Temporal Captioner 的视觉输出不是唯一决定因素。`TemporalMemory` 对三类容易被单帧误判的阶段增加运动约束：
 
 - **门口/阈值穿越**：需要地标跟踪器给出可信的通过证据，或者先出现近距离阈值、随后有充分前向位移且偏航变化受限；仅看到门口或目标房间不足以完成。
 - **转向前的决策点**：需要在子目标内走过最低路径长度，并测得与下一阶段方向一致的偏航变化。
@@ -174,8 +174,8 @@ v3 的 R2R worker 会将每步的内部状态通过 JSON 返回；Habitat runner
 | 子目标计划解析与忠实性修正 | `agentflow/agents/vln_agent_3_planning.py` |
 | 地标跟踪与门口穿越校验 | `agentflow/agents/vln_agent_3_landmark.py` |
 | waypoint 验证、意图护栏和恢复 | `agentflow/agents/vln_agent_3_waypoint.py` |
-| v3 增长式完成记忆与运动完成护栏 | `agentflow/agents/models_embodied_v2/memory/growing_completion_memory.py` |
-| 双窗口 Captioner | `agentflow/agents/models_embodied_v2/TemporalCaptioner.py` |
+| v3 增长式完成记忆与运动完成护栏 | `agentflow/agents/models_embodied_v2/memory/temporal_memory/temporal_memory.py` |
+| 双窗口 Captioner | `agentflow/agents/models_embodied_v2/memory/temporal_memory/temporal_captioner.py` |
 | 任务状态及类型化事件接收端 | `agentflow/agents/models_embodied_v2/memory/task_memory.py` |
 | R2R actor worker 与调试字段 | `FreeAskAgent_R2R/integrations/vln_waypoint_worker.py` |
 | R2R/Habitat 日志与启动入口 | `FreeAskAgent_R2R/integrations/run_habitat_2.py`、`run_vln_agent_3_r2r_ce_8gpu.sh` |

@@ -9,7 +9,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
-from .data_models import (
+from ...data_models import (
     CaptionResult,
     DualWindowCaptionResult,
     ErrorMode,

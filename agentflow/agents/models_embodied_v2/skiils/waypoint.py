@@ -7,8 +7,8 @@ from typing import Any, Optional
 
 import numpy as np
 
-from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
-    GrowingCompletionMemory,
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
+    TemporalMemory,
 )
 from .protocol import (
     CORRIDOR_WAYPOINT_DEVIATION,
@@ -112,7 +112,7 @@ class WaypointPolicyMixin:
         self,
         error_mode: str,
     ) -> tuple[Optional[str], str]:
-        if not isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if not isinstance(self.temporal_memory, TemporalMemory):
             return None, "motion evidence unavailable"
         recent = self.temporal_memory.recent_frames()[
             -STALL_EVIDENCE_FRAMES:

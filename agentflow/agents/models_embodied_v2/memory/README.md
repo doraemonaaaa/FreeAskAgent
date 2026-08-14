@@ -1,8 +1,8 @@
 # VLN Task and Temporal Memory
 
 `TaskMemory` owns the episode instruction, ordered subgoals, latest RGB
-observation, and events used by the planner. `TemporalMemory` retains a copied
-sliding window of the latest eight RGB observations for the current subgoal.
+observation, and events used by the planner. `TemporalMemory` retains copied
+observations for the current subgoal and selects bounded evidence windows.
 Neither its internal `MemoryFrame` nor its public API contains actions.
 
 ## Per-frame update
@@ -13,11 +13,12 @@ result = temporal_memory.update_from_task_memory()
 ```
 
 `update_from_task_memory()` reads `TaskMemory.get_latest_observation()`,
-ignores an already-consumed observation, and calls the captioner after eight
-distinct frames are available. The captioner judges:
+ignores an already-consumed observation, and analyzes every distinct frame.
+Completion uses at most nine selected frames; error diagnosis uses its recent
+suffix of at most eight frames. The captioner judges:
 
 - whether the current subgoal is visually complete;
-- whether the eight-frame sequence shows a cumulative visual error.
+- whether the recent sequence shows a cumulative visual error.
 
 Temporal Memory publishes compact `ERROR` and `SUBGOAL_COMPLETED` events back
 through `TaskMemory.publish_temporal_event()`.

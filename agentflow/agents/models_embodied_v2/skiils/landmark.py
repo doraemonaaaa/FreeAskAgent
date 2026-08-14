@@ -9,8 +9,8 @@ from typing import Any, Optional
 import numpy as np
 
 from agentflow.agents.models_embodied_v2.data_models import Subgoal
-from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
-    GrowingCompletionMemory,
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
+    TemporalMemory,
 )
 from .protocol import (
     DOORWAY_CROSSING_M,
@@ -41,7 +41,7 @@ class LandmarkTrackerMixin:
         self.last_landmark_normalized = None
         self.last_landmark_pixel = None
         if subgoal is None:
-            landmark = GrowingCompletionMemory._unknown_landmark(
+            landmark = TemporalMemory._unknown_landmark(
                 "no active subgoal"
             )
             self.last_landmark = landmark
@@ -71,7 +71,7 @@ class LandmarkTrackerMixin:
             )
         )
         path_length_m = translation_m
-        if isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if isinstance(self.temporal_memory, TemporalMemory):
             prior_frames = self.temporal_memory.recent_frames()
             if prior_frames:
                 path_length_m += prior_frames[-1].subgoal_path_length_m
@@ -163,7 +163,7 @@ class LandmarkTrackerMixin:
             self.last_landmark_error = (
                 f"{type(last_error).__name__}: {last_error}"
             )
-            landmark = GrowingCompletionMemory._unknown_landmark(
+            landmark = TemporalMemory._unknown_landmark(
                 "tracker output unavailable"
             )
         self.last_landmark = landmark

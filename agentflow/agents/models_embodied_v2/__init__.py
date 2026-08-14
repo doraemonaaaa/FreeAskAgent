@@ -1,6 +1,6 @@
 """VLN temporal understanding and memory components."""
 
-from .TemporalCaptioner import (
+from .memory.temporal_memory.temporal_captioner import (
     CaptionResult,
     DualWindowCaptionResult,
     ErrorMode,

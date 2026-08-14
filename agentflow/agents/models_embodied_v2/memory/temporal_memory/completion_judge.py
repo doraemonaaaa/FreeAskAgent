@@ -8,9 +8,6 @@ import json
 import re
 from typing import Any, Deque, Optional
 
-from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
-    TemporalCaptioner,
-)
 from agentflow.agents.models_embodied_v2.data_models import (
     CaptionResult,
     MemoryFrame,
@@ -18,11 +15,9 @@ from agentflow.agents.models_embodied_v2.data_models import (
     TemporalFrameInput,
     TemporalMemoryConfig,
 )
-from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
-from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
-    TemporalMemory,
-    TemporalStateError,
-)
+from .interfaces import TaskMemoryPort, TemporalCaptionerPort
+from .temporal_memory import TemporalStateError
+from .preview_store import PreviewStore
 from agentflow.agents.models_embodied_v2.skiils.preview import (
     PreviewSelector,
     UnimplementedPreviewSelector,
@@ -39,20 +34,21 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
 )
 
 
-class GrowingCompletionMemory(TemporalMemory):
+class CompletionMemoryMixin:
     """Retain full history and send bounded evidence to completion."""
 
     def __init__(
         self,
         *,
-        captioner: TemporalCaptioner,
-        task_memory: TaskMemory,
+        captioner: TemporalCaptionerPort,
+        task_memory: TaskMemoryPort,
         preview_selector: Optional[PreviewSelector] = None,
+        config: Optional[TemporalMemoryConfig] = None,
     ) -> None:
         super().__init__(
             captioner=captioner,
             task_memory=task_memory,
-            config=TemporalMemoryConfig(enable_error_detection=True),
+            config=config or TemporalMemoryConfig(enable_error_detection=True),
         )
         # The base class uses deque(maxlen=8). Keep the active subgoal's full
         # history here, but select a bounded evidence set for each model call.
@@ -65,9 +61,31 @@ class GrowingCompletionMemory(TemporalMemory):
         self.preview_selector: PreviewSelector = (
             preview_selector or UnimplementedPreviewSelector()
         )
-        self._preview_views: tuple[Any, ...] = ()
-        self._preview_selection: Optional[PreviewSelection] = None
-        self._preview_error: Optional[str] = None
+        self._preview_store = PreviewStore()
+
+    @property
+    def _preview_views(self) -> tuple[Any, ...]:
+        return self._preview_store.views
+
+    @_preview_views.setter
+    def _preview_views(self, value: tuple[Any, ...]) -> None:
+        self._preview_store.views = value
+
+    @property
+    def _preview_selection(self) -> Optional[PreviewSelection]:
+        return self._preview_store.selection
+
+    @_preview_selection.setter
+    def _preview_selection(self, value: Optional[PreviewSelection]) -> None:
+        self._preview_store.selection = value
+
+    @property
+    def _preview_error(self) -> Optional[str]:
+        return self._preview_store.error
+
+    @_preview_error.setter
+    def _preview_error(self, value: Optional[str]) -> None:
+        self._preview_store.error = value
 
     def reset(self) -> None:
         super().reset()
@@ -139,9 +157,8 @@ class GrowingCompletionMemory(TemporalMemory):
         return self._preview_error
 
     def clear_preview(self) -> None:
-        self._preview_views = ()
-        self._preview_selection = None
-        self._preview_error = None
+        if hasattr(self, "_preview_store"):
+            self._preview_store.clear()
 
     @staticmethod
     def _unknown_landmark(evidence: str) -> _LandmarkOutput:
@@ -274,6 +291,11 @@ class GrowingCompletionMemory(TemporalMemory):
             raise TemporalStateError("current subgoal is not set")
         if not self._frames:
             raise TemporalStateError("at least one frame is required")
+
+        # The unified class still accepts lightweight legacy captioner fakes
+        # that only implement the original single-window API.
+        if not hasattr(self.captioner, "analyze_dual_window"):
+            return super().analyze()
 
         selected_frames = self._select_completion_frames()
         completion_frames = tuple(

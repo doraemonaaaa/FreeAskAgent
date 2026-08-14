@@ -20,7 +20,7 @@ from typing import Any, Deque, Optional, Sequence
 import numpy as np
 
 from agentflow.agents.models_embodied_v2.actor import Actor
-from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
     TemporalCaptioner,
 )
 from agentflow.agents.models_embodied_v2.data_models import (
@@ -61,8 +61,8 @@ from agentflow.agents.models_embodied_v2.skiils.planning import parse_subgoal_pl
 from agentflow.agents.models_embodied_v2.skiils.landmark import LandmarkTrackerMixin
 from agentflow.agents.models_embodied_v2.skiils.waypoint import WaypointPolicyMixin
 
-from agentflow.agents.models_embodied_v2.memory.growing_completion_memory import (
-    GrowingCompletionMemory,
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
+    TemporalMemory,
 )
 class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     """Version 3 actor used by the Habitat waypoint worker."""
@@ -205,7 +205,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # Preview views belong to the step that asked for them. Holding them
         # past it would keep several images alive for the rest of the episode
         # and let a later reader mistake them for this step's.
-        if isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if isinstance(self.temporal_memory, TemporalMemory):
             self.temporal_memory.clear_preview()
         current = (
             self.task_memory.get_current_subgoal()
@@ -242,7 +242,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             translation_m=translation_m,
             yaw_delta_deg=yaw_delta_deg,
         )
-        if isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if isinstance(self.temporal_memory, TemporalMemory):
             self.temporal_memory.set_motion_evidence(
                 translation_m=translation_m,
                 yaw_delta_deg=yaw_delta_deg,
@@ -662,7 +662,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # Kept apart from ``last_waypoint_guard_reason``: ``_select_pixel``
         # clears that one on entry, and these are different guards anyway.
         self.last_preview_guard_reason = None
-        if not isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if not isinstance(self.temporal_memory, TemporalMemory):
             self.last_preview_guard_reason = (
                 "preview views discarded: working memory cannot hold them"
             )
@@ -742,7 +742,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             <= FINAL_TARGET_MAX_WAYPOINT_DEPTH_M
         )
         path_length_m = 0.0
-        if isinstance(self.temporal_memory, GrowingCompletionMemory):
+        if isinstance(self.temporal_memory, TemporalMemory):
             frames = self.temporal_memory.recent_frames()
             if frames:
                 path_length_m = frames[-1].subgoal_path_length_m
@@ -1035,7 +1035,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self.task_memory.reset(goal=instruction, subgoals=subgoals)
 
         if self.temporal_memory is None:
-            self.temporal_memory = GrowingCompletionMemory(
+            self.temporal_memory = TemporalMemory(
                 captioner=TemporalCaptioner(
                     engine=self.llm,
                     config=TemporalCaptionerConfig(
@@ -1069,7 +1069,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
 __all__ = (
     "CameraIntrinsics",
     "DEFAULT_MODEL_PATH",
-    "GrowingCompletionMemory",
+    "TemporalMemory",
     "NavigationDecision",
     "NavigationPoint",
     "POINT_PROMPT",

@@ -8,7 +8,7 @@ import pytest
 from agentflow.agents.models_embodied_v2 import Subgoal, TaskMemory
 from agentflow.agents.vln_agent_3 import (
     Actor,
-    GrowingCompletionMemory,
+    TemporalMemory,
 )
 
 
@@ -183,7 +183,7 @@ def test_prepare_task_uses_strict_schema_and_growing_memory():
     assert "reaches that named landmark or decision point" in (
         engine.calls[0][1]["system_prompt"]
     )
-    assert isinstance(actor.temporal_memory, GrowingCompletionMemory)
+    assert isinstance(actor.temporal_memory, TemporalMemory)
     assert actor.temporal_memory.diagnostics()[
         "error_detection_enabled"
     ] is True

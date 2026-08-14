@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from agentflow.agents.models_embodied_v2.TemporalCaptioner import (
+from agentflow.agents.models_embodied_v2.memory.temporal_memory.temporal_captioner import (
     Subgoal,
     TemporalCaptioner,
     TemporalCaptionerConfig,
