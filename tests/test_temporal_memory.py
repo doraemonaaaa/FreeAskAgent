@@ -16,6 +16,11 @@ from agentflow.agents.models_embodied_v2.memory import (
     TemporalMemoryConfig,
     TemporalStateError,
 )
+from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
+    FinalTargetEvidence,
+    SceneAnalysisResult,
+    SceneLandmark,
+)
 
 
 np = pytest.importorskip("numpy")
@@ -32,6 +37,60 @@ class FakeCaptioner:
         if isinstance(output, Exception):
             raise output
         return output
+
+
+class SceneCaptioner:
+    def __init__(self, result_factory):
+        self.result_factory = result_factory
+        self.calls = []
+
+    def analyze_scene(self, request):
+        self.calls.append(request)
+        return self.result_factory(request)
+
+
+def _scene_result(
+    request,
+    *,
+    completed=False,
+    destination_dominant=False,
+    final_visible=False,
+    proximity="NEAR",
+    door_state="NOT_APPLICABLE",
+    door_camera_side="NOT_APPLICABLE",
+):
+    evidence = "bounded unified scene evidence"
+    return SceneAnalysisResult(
+        subgoal_id=request.subgoal.subgoal_id,
+        landmark=SceneLandmark(
+            visible=True,
+            direction="CENTER",
+            proximity=proximity,
+            passed=completed,
+            destination_dominant=destination_dominant,
+            confidence=0.95,
+            evidence=evidence,
+            u=500,
+            v=450,
+        ),
+        completed=completed,
+        completion_confidence=0.95 if completed else 0.0,
+        completion_evidence=evidence,
+        door_state=door_state,
+        door_camera_side=door_camera_side,
+        error=False,
+        error_mode="NONE",
+        error_confidence=0.0,
+        error_evidence=evidence,
+        final_target=FinalTargetEvidence(
+            visible=final_visible,
+            proximity=proximity if final_visible else "UNKNOWN",
+            confidence=0.95 if final_visible else 0.0,
+            evidence=evidence,
+        ),
+        raw_response="{}",
+        latency_ms=1.0,
+    )
 
 
 def _result(
@@ -340,3 +399,168 @@ def test_missing_subgoal_and_window_size_invariants():
         memory.append_observation(_frame(1))
     with pytest.raises(ValueError, match="fixed eight-frame"):
         TemporalMemoryConfig(window_size=3)
+
+
+def test_unified_scene_call_is_once_per_step_and_history_stays_bounded():
+    task = TaskMemory(
+        "Reach two landmarks.",
+        subgoals=(
+            Subgoal("1", "Reach the hall marker", "See the marker nearby."),
+            Subgoal("2", "Reach the table", "See the table nearby."),
+        ),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(request))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    for index in range(20):
+        memory.set_motion_evidence(translation_m=0.25, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        memory.analyze()
+
+    assert len(captioner.calls) == 20
+    assert len(memory.recent_frames()) == 16
+    assert [frame.frame_id for frame in memory.recent_frames()] == list(
+        range(5, 21)
+    )
+    assert [frame.frame_id for frame in captioner.calls[-1].frames] == list(
+        range(5, 21)
+    )
+    assert memory.recent_frames()[-1].subgoal_path_length_m == pytest.approx(5.0)
+
+
+def test_deferred_analysis_keeps_frame_for_next_captioner_window():
+    task = TaskMemory(
+        "Reach two landmarks.",
+        subgoals=(
+            Subgoal("1", "Reach the hall marker", "See the marker nearby."),
+        ),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(request))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    task.record_input(_frame(0))
+    assert memory.update_from_task_memory(analyze=False) is None
+    assert len(captioner.calls) == 0
+    task.record_input(_frame(1))
+    result = memory.update_from_task_memory()
+
+    assert result is not None
+    assert len(captioner.calls) == 1
+    assert [frame.frame_id for frame in captioner.calls[0].frames] == [1, 2]
+
+
+def test_doorway_completion_is_owned_by_captioner_crossing_judgement():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(
+        request,
+        completed=len(request.frames) >= 2,
+        destination_dominant=len(request.frames) >= 2,
+        door_state=("CROSSED" if len(request.frames) >= 2 else "APPROACHING"),
+        door_camera_side=(
+            "AFTER_DOOR" if len(request.frames) >= 2 else "BEFORE_DOOR"
+        ),
+    ))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    memory.set_motion_evidence(translation_m=0.0, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(0))
+    assert memory.analyze().completed is False
+    memory.set_motion_evidence(translation_m=0.0, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(1))
+    result = memory.analyze()
+
+    assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+    assert result.door_state == "CROSSED"
+    assert result.door_camera_side == "AFTER_DOOR"
+    assert len(captioner.calls) == 2
+
+
+def test_doorway_cannot_jump_from_unseen_directly_to_crossed():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            door_state="CROSSED",
+            door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    memory.append_observation(_frame(0))
+    result = memory.analyze()
+
+    assert result.completed is False
+    assert task.get_current_subgoal().subgoal_id == "1"
+    assert "camera has not reached" in memory.diagnostics()[
+        "completion_guard"
+    ]
+
+
+def test_model_crossing_is_accepted_at_model_localized_doorway():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            door_state="CROSSED",
+            door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    memory.set_doorway_target_distance(0.80)
+    memory.append_observation(_frame(0))
+    assert memory.analyze().completed is False
+    memory.set_doorway_target_distance(0.30)
+    memory.append_observation(_frame(1))
+    result = memory.analyze()
+
+    assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+    assert memory.diagnostics()["doorway_target_distance_m"] is None
+
+
+def test_final_subgoal_requires_two_stable_model_owned_at_observations():
+    task = TaskMemory(
+        "Walk to the pool.",
+        subgoals=(
+            Subgoal(
+                "1",
+                "Walk forward to the pool area",
+                "The camera is directly beside the pool.",
+            ),
+        ),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            final_visible=True,
+            proximity="AT",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    results = []
+    for index in range(2):
+        memory.set_motion_evidence(translation_m=0.25, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        results.append(memory.analyze())
+
+    assert [result.completed for result in results] == [False, True]
+    assert task.is_task_complete() is True
+    assert len(captioner.calls) == 2

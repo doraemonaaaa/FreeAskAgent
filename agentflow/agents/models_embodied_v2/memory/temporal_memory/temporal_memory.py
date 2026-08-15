@@ -146,14 +146,26 @@ class _BaseTemporalMemory:
         self._next_frame_id += 1
         return frame
 
-    def update_from_task_memory(self) -> Optional[CaptionResult]:
-        """Consume the latest Task Memory RGB and analyze the current window."""
+    def update_from_task_memory(
+        self,
+        *,
+        analyze: bool = True,
+    ) -> Optional[CaptionResult]:
+        """Consume the latest Task Memory RGB and optionally analyze it.
+
+        Deferring inference still appends the frame, including its measured
+        motion, so the next analysis receives the same bounded temporal
+        evidence. This is used while following a stable, still-distant
+        structural waypoint where the completion guard cannot yet pass.
+        """
         self._sync_task_state()
         # An exhausted plan leaves no subgoal to judge against. Appending would
         # raise, so report "nothing analyzed" and let the caller end the task.
         if self._subgoal is None:
             return None
         if self.append_latest_observation() is None:
+            return None
+        if not analyze:
             return None
         return self.analyze_if_ready()
 

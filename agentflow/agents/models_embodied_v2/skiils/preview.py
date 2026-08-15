@@ -23,22 +23,24 @@ from agentflow.agents.models_embodied_v2.data_models import (
 )
 
 
-# Written for whoever implements the selector; nothing here sends it yet.  The
-# views are labelled with their index and heading offset in the same order they
-# are held, so the reply only has to name an index.
+# The views are labelled with their index and heading offset in the same order
+# they are held. The reply binds one navigable floor point to one exact view.
 PREVIEW_SELECTION_PROMPT = """You are judging which way an indoor navigation
 agent should go. The images are simultaneous views from one standing position,
 given in order, each labelled with its view_index and its heading offset in
-degrees from the agent's current facing: negative is to the right, positive is
-to the left, and 0 is straight ahead.
+degrees from the agent's current facing: negative is to the left, positive is
+to the right, and 0 is straight ahead.
 
-Choose the single view that best advances the active navigation subgoal. Judge
-the direction only: another component picks the exact floor point inside the
-view you name. Prefer a view whose visible floor actually leads somewhere over
-one that merely shows the target behind an obstacle.
+Choose the single view that best advances the active navigation subgoal, then
+choose one reachable FLOOR pixel in that view. Report pixel coordinates on a
+normalized 0..1000 grid: u=0 is the left edge, u=1000 the right edge, v=0 the
+top, and v=1000 the bottom. For a doorway, put the point on visible walkable
+floor just inside its structural threshold; do not default to image centre
+when the opening is off-centre. Prefer floor that visibly leads through the
+required opening over open floor that merely stays in the current room.
 
 Reply only with one exact JSON object:
-{"view_index":integer,"confidence":0.0,"evidence":"brief visual reason"}"""
+{"view_index":integer,"u":integer,"v":integer,"confidence":0.0,"evidence":"brief visual reason"}"""
 
 
 class PreviewSelectionOutput(BaseModel):
@@ -47,6 +49,8 @@ class PreviewSelectionOutput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     view_index: int
+    u: int
+    v: int
     confidence: float
     evidence: str
 
@@ -54,6 +58,8 @@ class PreviewSelectionOutput(BaseModel):
     def valid_selection(self) -> "PreviewSelectionOutput":
         if self.view_index < 0:
             raise ValueError("view_index must not be negative")
+        if not 0 <= self.u <= 1000 or not 0 <= self.v <= 1000:
+            raise ValueError("u and v must be normalized integers in [0, 1000]")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0 and 1")
         self.evidence = self.evidence.strip()
@@ -81,6 +87,8 @@ def parse_preview_selection(
         raise ValueError(f"view_index must be in [0, {view_count - 1}]")
     return PreviewSelection(
         view_index=output.view_index,
+        u=output.u,
+        v=output.v,
         confidence=output.confidence,
         evidence=output.evidence,
     )

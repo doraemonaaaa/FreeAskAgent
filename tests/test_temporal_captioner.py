@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from agentflow.agents.models_embodied_v2.memory.temporal_memory.temporal_captioner import (
+    SceneAnalysisRequest,
     Subgoal,
     TemporalAnalysisRequest,
     TemporalCaptioner,
@@ -14,6 +15,7 @@ from agentflow.agents.models_embodied_v2.memory.temporal_memory.temporal_caption
     TemporalInputError,
     TemporalOutputError,
 )
+from agentflow.agents.models_embodied_v2.data_models import PreviewView
 
 
 np = pytest.importorskip("numpy")
@@ -46,6 +48,41 @@ def _request() -> TemporalAnalysisRequest:
             for index in range(1, 9)
         ),
     )
+
+
+def _scene_request() -> SceneAnalysisRequest:
+    return SceneAnalysisRequest(
+        subgoal=Subgoal(
+            "2",
+            "Walk forward to the pool area",
+            "The camera is directly beside the pool.",
+        ),
+        frames=tuple(
+            TemporalFrameInput(
+                frame_id=index,
+                image=np.full((12, 16, 3), index, dtype=np.uint8),
+                translation_m=0.25,
+                subgoal_path_length_m=index * 0.25,
+            )
+            for index in range(1, 10)
+        ),
+        is_final_subgoal=True,
+    )
+
+
+SCENE_RESPONSE = (
+    '{"landmark":{"visible":true,"direction":"LEFT",'
+    '"proximity":"NEAR","passed":false,'
+    '"destination_dominant":true,"u":512,"v":430,'
+    '"confidence":0.95},"door_state":"NOT_APPLICABLE",'
+    '"door_camera_side":"NOT_APPLICABLE",'
+    '"door_transition":"NOT_APPLICABLE",'
+    '"current_room_side":"NOT_APPLICABLE","completed":true,'
+    '"completion_confidence":0.91,"error_mode":"NONE",'
+    '"error_confidence":0.0,"final_target":{"visible":true,'
+    '"proximity":"AT","confidence":0.93},'
+    '"evidence":"camera is beside the pool"}'
+)
 
 
 def test_sends_subgoal_and_eight_images_without_actions():
@@ -138,6 +175,190 @@ def test_engine_is_reused_between_windows():
     captioner.analyze(_request())
     captioner.analyze(_request())
     assert len(engine.calls) == 2
+
+
+def test_scene_analysis_combines_all_perception_in_one_bounded_call():
+    engine = FakeEngine(SCENE_RESPONSE)
+    captioner = TemporalCaptioner(engine=engine)
+    request = _scene_request()
+
+    result = captioner.analyze_scene(request)
+
+    assert len(engine.calls) == 1
+    content, kwargs = engine.calls[0]
+    assert "Is final subgoal: True" in content[0]
+    assert "Next route stage" not in content[0]
+    assert sum(isinstance(item, bytes) for item in content) == 9
+    assert kwargs["image_max_pixels"] == 224**2
+    assert result.completed is True
+    assert result.error_mode == "NONE"
+    assert result.final_target.visible is True
+    assert result.door_state == "NOT_APPLICABLE"
+    # Normalized coordinates resolve contradictory free-form directions at
+    # the perception boundary.
+    assert result.landmark.direction == "CENTER"
+
+
+def test_final_completion_rejects_model_near_as_not_yet_at_target():
+    response = SCENE_RESPONSE.replace(
+        '"proximity":"AT"', '"proximity":"NEAR"'
+    ).replace(
+        '"evidence":"camera is beside the pool"',
+        '"evidence":"pool is visible in the distance through the doorway; '
+        'camera has not reached it"',
+    )
+    result = TemporalCaptioner(engine=FakeEngine(response)).analyze_scene(
+        _scene_request()
+    )
+
+    assert result.final_target.visible is True
+    assert result.final_target.proximity == "NEAR"
+    assert result.completed is False
+
+
+def test_final_completion_normalizes_positive_model_evidence_to_at():
+    response = SCENE_RESPONSE.replace(
+        '"proximity":"AT"', '"proximity":"FAR"'
+    ).replace(
+        '"evidence":"camera is beside the pool"',
+        '"evidence":"camera has reached the pool; its edge is in the '
+        'foreground and no source room is visible"',
+    )
+    result = TemporalCaptioner(engine=FakeEngine(response)).analyze_scene(
+        _scene_request()
+    )
+
+    assert result.final_target.proximity == "AT"
+    assert result.completed is True
+
+
+def test_scene_prompt_marks_current_frame_and_rejects_false_crossing_cues():
+    doorway_request = replace(
+        _scene_request(),
+        subgoal=Subgoal(
+            "1",
+            "Exit through the doorway into the pool room",
+            "The camera has crossed the threshold.",
+        ),
+        is_final_subgoal=False,
+    )
+    response = SCENE_RESPONSE.replace(
+        '"door_state":"NOT_APPLICABLE"',
+        '"door_state":"AT_THRESHOLD"',
+    ).replace(
+        '"door_camera_side":"NOT_APPLICABLE"',
+        '"door_camera_side":"BEFORE_DOOR"',
+    ).replace(
+        '"door_transition":"NOT_APPLICABLE"',
+        '"door_transition":"APPROACHED"',
+    ).replace(
+        '"current_room_side":"NOT_APPLICABLE"',
+        '"current_room_side":"ORIGINAL_SIDE"',
+    ).replace('"completed":true', '"completed":false')
+    engine = FakeEngine(response)
+
+    TemporalCaptioner(engine=engine).analyze_scene(doorway_request)
+
+    content, kwargs = engine.calls[0]
+    metadata = [item for item in content if isinstance(item, str)]
+    assert "role=HISTORICAL" in metadata[1]
+    assert "role=CURRENT" in metadata[-1]
+    system_prompt = kwargs["system_prompt"]
+    assert "door disappearing" in system_prompt
+    assert "TURNED_AWAY, not PASSED_THROUGH" in system_prompt
+    assert "bathtub, sink" in system_prompt
+
+
+def test_door_completion_requires_model_visible_passage_and_far_side():
+    doorway_request = replace(
+        _scene_request(),
+        subgoal=Subgoal(
+            "1",
+            "Exit through the doorway",
+            "The camera has crossed the threshold.",
+        ),
+        is_final_subgoal=False,
+    )
+    contradictory = SCENE_RESPONSE.replace(
+        '"door_state":"NOT_APPLICABLE"',
+        '"door_state":"CROSSED"',
+    ).replace(
+        '"door_camera_side":"NOT_APPLICABLE"',
+        '"door_camera_side":"AFTER_DOOR"',
+    ).replace(
+        '"door_transition":"NOT_APPLICABLE"',
+        '"door_transition":"APPROACHED"',
+    ).replace(
+        '"current_room_side":"NOT_APPLICABLE"',
+        '"current_room_side":"ORIGINAL_SIDE"',
+    )
+
+    result = TemporalCaptioner(
+        engine=FakeEngine(contradictory)
+    ).analyze_scene(doorway_request)
+
+    assert result.completed is False
+
+
+def test_scene_analysis_reuses_encoded_retained_frames():
+    engine = FakeEngine(SCENE_RESPONSE)
+    captioner = TemporalCaptioner(engine=engine)
+    request = _scene_request()
+
+    captioner.analyze_scene(request)
+    first_encoded = [
+        item for item in engine.calls[0][0] if isinstance(item, bytes)
+    ]
+    captioner.analyze_scene(request)
+    second_encoded = [
+        item for item in engine.calls[1][0] if isinstance(item, bytes)
+    ]
+
+    assert len(engine.calls) == 2
+    assert all(
+        first is second
+        for first, second in zip(first_encoded, second_encoded, strict=True)
+    )
+    assert len(captioner._png_cache) == 9
+
+
+def test_preview_selector_compares_views_without_evicting_temporal_cache():
+    engine = FakeEngine(
+        '{"view_index":2,"u":320,"v":780,"confidence":0.93,'
+        '"evidence":"doorway and floor path are centered"}'
+    )
+    captioner = TemporalCaptioner(engine=engine)
+    captioner._png(np.zeros((12, 16, 3), dtype=np.uint8))
+    cached_before = tuple(captioner._png_cache.items())
+    views = tuple(
+        PreviewView(
+            yaw_deg=yaw,
+            rgb=np.full((12, 16, 3), index, dtype=np.uint8),
+        )
+        for index, yaw in enumerate((-45.0, 0.0, 45.0))
+    )
+
+    selection = captioner.select(
+        subgoal=Subgoal(
+            "1",
+            "Exit through the doorway",
+            "The camera crosses the threshold.",
+        ),
+        views=views,
+    )
+
+    assert selection is not None
+    assert selection.view_index == 2
+    assert (selection.u, selection.v) == (320, 780)
+    content, kwargs = engine.calls[-1]
+    assert "structural doorway" in content[1]
+    assert "view_index=2; yaw_deg=+45.0" in content[-2]
+    assert "negative is to the left, positive is\nto the right" in (
+        engine.calls[-1][1]["system_prompt"]
+    )
+    assert sum(isinstance(item, bytes) for item in content) == 3
+    assert kwargs["max_tokens"] == 48
+    assert tuple(captioner._png_cache.items()) == cached_before
 
 
 @pytest.mark.parametrize(

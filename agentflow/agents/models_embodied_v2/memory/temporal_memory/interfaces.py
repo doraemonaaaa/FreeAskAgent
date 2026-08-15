@@ -1,19 +1,52 @@
-"""Dependency interfaces used by temporal memory."""
+"""Dependency interfaces used by Temporal Memory."""
+
 from __future__ import annotations
+
 from typing import Any, Optional, Protocol, Sequence
-from ...data_models import CaptionResult, Subgoal, TemporalAnalysisRequest, TemporalEvent, TemporalFrameInput
+
+from ...data_models import (
+    SceneAnalysisRequest,
+    SceneAnalysisResult,
+    Subgoal,
+    TemporalEvent,
+)
+
 
 class TaskMemoryPort(Protocol):
     observation_count: int
-    def reset(self, *, goal: str, task_guidance: str = "", subgoals: Sequence[Any] = ()) -> None: ...
+
+    def reset(
+        self,
+        *,
+        goal: str,
+        task_guidance: str = "",
+        subgoals: Sequence[Any] = (),
+    ) -> None: ...
+
     def get_current_subgoal(self) -> Optional[Subgoal]: ...
+
+    def get_next_subgoal(self) -> Optional[Subgoal]: ...
+
+    def is_current_subgoal_final(self) -> bool: ...
+
     def get_latest_observation(self) -> Any: ...
+
     def get_reset_generation(self) -> int: ...
+
     def publish_temporal_event(self, event: TemporalEvent) -> None: ...
 
+
 class TemporalCaptionerPort(Protocol):
-    def analyze(self, request: TemporalAnalysisRequest) -> CaptionResult: ...
-    def analyze_dual_window(self, *, subgoal: Subgoal, completion_frames: Sequence[TemporalFrameInput], error_frames: Sequence[TemporalFrameInput]) -> Any: ...
+    def analyze_scene(
+        self,
+        request: SceneAnalysisRequest,
+    ) -> SceneAnalysisResult: ...
+
 
 class PreviewSelectorPort(Protocol):
-    def select(self, *, subgoal: Optional[Subgoal], views: Sequence[Any]) -> Any: ...
+    def select(
+        self,
+        *,
+        subgoal: Optional[Subgoal],
+        views: Sequence[Any],
+    ) -> Any: ...

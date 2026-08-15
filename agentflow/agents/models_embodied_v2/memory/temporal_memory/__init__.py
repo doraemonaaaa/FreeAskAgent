@@ -8,10 +8,25 @@ from .temporal_captioner import (
     TemporalOutputError,
 )
 from .temporal_memory import TemporalMemory, TemporalMemoryError, TemporalStateError
-from ...data_models import TemporalCaptionerConfig, TemporalMemoryConfig
+from ...data_models import (
+    DoorCameraSide,
+    DoorState,
+    FinalTargetEvidence,
+    SceneAnalysisRequest,
+    SceneAnalysisResult,
+    SceneLandmark,
+    TemporalCaptionerConfig,
+    TemporalMemoryConfig,
+)
 
 __all__ = (
+    "DoorCameraSide",
+    "DoorState",
     "PreviewSelectorPort",
+    "FinalTargetEvidence",
+    "SceneAnalysisRequest",
+    "SceneAnalysisResult",
+    "SceneLandmark",
     "TaskMemoryPort",
     "TemporalCaptioner",
     "TemporalCaptionerConfig",

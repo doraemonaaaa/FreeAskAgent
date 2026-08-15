@@ -15,6 +15,21 @@ ErrorMode = Literal[
 ]
 LandmarkDirection = Literal["LEFT", "CENTER", "RIGHT", "UNKNOWN"]
 LandmarkProximity = Literal["FAR", "NEAR", "AT", "UNKNOWN"]
+DoorState = Literal[
+    "NOT_APPLICABLE",
+    "NOT_VISIBLE",
+    "APPROACHING",
+    "AT_THRESHOLD",
+    "CROSSING",
+    "CROSSED",
+]
+DoorCameraSide = Literal[
+    "NOT_APPLICABLE",
+    "UNKNOWN",
+    "BEFORE_DOOR",
+    "AT_DOOR",
+    "AFTER_DOOR",
+]
 # What the actor is asking the controller to do with this step.  ``EXECUTION``
 # is the pre-existing behaviour: commit to the returned waypoint.  ``PREVIEW``
 # asks the runner for surrounding views before committing, and ``EXPLORATION``
@@ -150,6 +165,208 @@ class TemporalAnalysisRequest:
             raise TemporalInputError("frame IDs must be unique and increasing")
 
 
+def _confidence(value: Any, label: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or not 0.0 <= float(value) <= 1.0
+    ):
+        raise TemporalInputError(f"{label} must be a number in [0, 1]")
+    return float(value)
+
+
+@dataclass(frozen=True, slots=True)
+class SceneLandmark:
+    """Current-frame state of the landmark named by the active subgoal."""
+
+    visible: bool
+    direction: LandmarkDirection
+    proximity: LandmarkProximity
+    passed: bool
+    destination_dominant: bool
+    confidence: float
+    evidence: str
+    u: int | None = None
+    v: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.visible, bool) or not isinstance(self.passed, bool):
+            raise TemporalInputError("landmark visibility fields must be boolean")
+        if not isinstance(self.destination_dominant, bool):
+            raise TemporalInputError("destination_dominant must be boolean")
+        if self.direction not in ("LEFT", "CENTER", "RIGHT", "UNKNOWN"):
+            raise TemporalInputError("invalid landmark direction")
+        if self.proximity not in ("FAR", "NEAR", "AT", "UNKNOWN"):
+            raise TemporalInputError("invalid landmark proximity")
+        object.__setattr__(
+            self,
+            "confidence",
+            _confidence(self.confidence, "landmark confidence"),
+        )
+        evidence = str(self.evidence or "").strip()
+        if not evidence:
+            raise TemporalInputError("landmark evidence must not be empty")
+        object.__setattr__(self, "evidence", evidence)
+        if not self.visible:
+            object.__setattr__(self, "u", None)
+            object.__setattr__(self, "v", None)
+            if not self.passed and (
+                self.direction != "UNKNOWN" or self.proximity != "UNKNOWN"
+            ):
+                raise TemporalInputError(
+                    "invisible, unpassed landmark requires UNKNOWN state"
+                )
+        elif self.direction == "UNKNOWN" or self.proximity == "UNKNOWN":
+            raise TemporalInputError(
+                "visible landmark requires direction and proximity"
+            )
+        if (self.u is None) != (self.v is None):
+            object.__setattr__(self, "u", None)
+            object.__setattr__(self, "v", None)
+        if self.u is not None and self.v is not None:
+            if not 0 <= self.u <= 1000 or not 0 <= self.v <= 1000:
+                object.__setattr__(self, "u", None)
+                object.__setattr__(self, "v", None)
+
+
+@dataclass(frozen=True, slots=True)
+class FinalTargetEvidence:
+    """Semantic final-destination evidence, independent of floor depth."""
+
+    visible: bool
+    proximity: LandmarkProximity
+    confidence: float
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.visible, bool):
+            raise TemporalInputError("final target visible must be boolean")
+        if self.proximity not in ("FAR", "NEAR", "AT", "UNKNOWN"):
+            raise TemporalInputError("invalid final target proximity")
+        if not self.visible and self.proximity != "UNKNOWN":
+            raise TemporalInputError(
+                "invisible final target requires UNKNOWN proximity"
+            )
+        object.__setattr__(
+            self,
+            "confidence",
+            _confidence(self.confidence, "final target confidence"),
+        )
+        object.__setattr__(self, "evidence", str(self.evidence or "").strip())
+
+
+@dataclass(frozen=True, slots=True)
+class SceneAnalysisRequest:
+    """One bounded temporal window for a single scene-understanding call."""
+
+    subgoal: Subgoal
+    frames: tuple[TemporalFrameInput, ...]
+    is_final_subgoal: bool = False
+    next_subgoal: Subgoal | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.subgoal, Subgoal):
+            raise TemporalInputError("subgoal must be a Subgoal")
+        frames = tuple(self.frames)
+        object.__setattr__(self, "frames", frames)
+        if not 1 <= len(frames) <= 16:
+            raise TemporalInputError(
+                "scene request requires one to sixteen frames"
+            )
+        if any(not isinstance(frame, TemporalFrameInput) for frame in frames):
+            raise TemporalInputError(
+                "scene frames must contain TemporalFrameInput values"
+            )
+        ids = [frame.frame_id for frame in frames]
+        if ids != sorted(set(ids)):
+            raise TemporalInputError("scene frame IDs must be unique and increasing")
+        if not isinstance(self.is_final_subgoal, bool):
+            raise TemporalInputError("is_final_subgoal must be boolean")
+        if self.next_subgoal is not None and not isinstance(
+            self.next_subgoal, Subgoal
+        ):
+            raise TemporalInputError("next_subgoal must be a Subgoal or None")
+
+
+@dataclass(frozen=True, slots=True)
+class SceneAnalysisResult:
+    """Validated perception candidates from one unified Captioner request."""
+
+    subgoal_id: str
+    landmark: SceneLandmark
+    completed: bool
+    completion_confidence: float
+    completion_evidence: str
+    door_state: DoorState
+    door_camera_side: DoorCameraSide
+    error: bool
+    error_mode: ErrorMode
+    error_confidence: float
+    error_evidence: str
+    final_target: FinalTargetEvidence
+    raw_response: str
+    latency_ms: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "subgoal_id", _text(self.subgoal_id, "subgoal_id"))
+        if not isinstance(self.landmark, SceneLandmark):
+            raise TemporalInputError("landmark must be SceneLandmark")
+        if not isinstance(self.completed, bool) or not isinstance(self.error, bool):
+            raise TemporalInputError("scene decisions must be boolean")
+        if self.door_state not in (
+            "NOT_APPLICABLE",
+            "NOT_VISIBLE",
+            "APPROACHING",
+            "AT_THRESHOLD",
+            "CROSSING",
+            "CROSSED",
+        ):
+            raise TemporalInputError("invalid door state")
+        if self.door_camera_side not in (
+            "NOT_APPLICABLE",
+            "UNKNOWN",
+            "BEFORE_DOOR",
+            "AT_DOOR",
+            "AFTER_DOOR",
+        ):
+            raise TemporalInputError("invalid door camera side")
+        object.__setattr__(
+            self,
+            "completion_confidence",
+            _confidence(self.completion_confidence, "completion confidence"),
+        )
+        object.__setattr__(
+            self,
+            "error_confidence",
+            _confidence(self.error_confidence, "error confidence"),
+        )
+        if self.error_mode not in (
+            "NONE",
+            "WALL_STUCK",
+            "TURN_OSCILLATION",
+            "IN_PLACE_SPIN",
+            "GET_NOWHERE",
+        ):
+            raise TemporalInputError("invalid error mode")
+        if self.error != (self.error_mode != "NONE"):
+            raise TemporalInputError("error flag and error_mode disagree")
+        if not isinstance(self.final_target, FinalTargetEvidence):
+            raise TemporalInputError("final_target must be FinalTargetEvidence")
+        object.__setattr__(
+            self,
+            "completion_evidence",
+            str(self.completion_evidence or "").strip(),
+        )
+        object.__setattr__(
+            self,
+            "error_evidence",
+            str(self.error_evidence or "").strip(),
+        )
+        if self.latency_ms < 0:
+            raise TemporalInputError("latency_ms must not be negative")
+
+
 @dataclass(frozen=True, slots=True)
 class CaptionResult:
     subgoal_id: str
@@ -160,6 +377,12 @@ class CaptionResult:
     latency_ms: float
     error_confidence: float = 0.0
     error_evidence: str = ""
+    completion_confidence: float = 0.0
+    completion_evidence: str = ""
+    door_state: DoorState = "NOT_APPLICABLE"
+    door_camera_side: DoorCameraSide = "NOT_APPLICABLE"
+    landmark: SceneLandmark | None = None
+    final_target: FinalTargetEvidence | None = None
 
     def to_memory_text(self) -> str:
         state = "complete" if self.completed else "in progress"
@@ -332,14 +555,16 @@ class PreviewView:
 
 @dataclass(frozen=True, slots=True)
 class PreviewSelection:
-    """Which held preview view the actor should act on.
+    """Which held preview view and floor target the actor should act on.
 
-    The Captioner chooses the heading and nothing else: the actor still picks
-    the floor point inside that view with its ordinary waypoint policy, so the
-    corridor lock and the STOP deferral keep applying unchanged.
+    ``u`` and ``v`` use the same normalized 0..1000 image coordinates as the
+    ordinary waypoint contract. Keeping the target in the selected camera
+    view avoids silently replacing an off-centre doorway with image centre.
     """
 
     view_index: int
+    u: int = 500
+    v: int = 750
     confidence: float = 0.0
     evidence: str = ""
 
@@ -350,6 +575,14 @@ class PreviewSelection:
             or self.view_index < 0
         ):
             raise ValueError("view_index must be a non-negative integer")
+        for name in ("u", "v"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 0 <= value <= 1000
+            ):
+                raise ValueError(f"{name} must be an integer in [0, 1000]")
         if (
             isinstance(self.confidence, bool)
             or not isinstance(self.confidence, (int, float))

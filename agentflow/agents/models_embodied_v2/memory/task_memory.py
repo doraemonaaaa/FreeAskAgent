@@ -75,6 +75,19 @@ class TaskMemory:
             return None
         return self._subgoals[self._current_subgoal_index]
 
+    def get_next_subgoal(self) -> Optional[Any]:
+        """Return the stage after the active one without advancing state."""
+        index = self._current_subgoal_index + 1
+        if index >= len(self._subgoals):
+            return None
+        return self._subgoals[index]
+
+    def is_current_subgoal_final(self) -> bool:
+        """Whether the active stage is the last stage in the installed plan."""
+        return bool(self._subgoals) and self._current_subgoal_index == (
+            len(self._subgoals) - 1
+        )
+
     def set_subgoals(self, subgoals: Sequence[Any]) -> None:
         """Install a task plan and activate its first subgoal.
 

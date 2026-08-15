@@ -1,12 +1,4 @@
-"""Version-3 VLN RGB-D waypoint actor.
-
-Version 3 keeps the proven waypoint selection and RGB-D back-projection from
-``vln_agent_2`` while changing temporal understanding in two ways:
-
-* every observation is analyzed for subgoal completion;
-* the completion window contains every frame since the current subgoal began;
-* a separate recent eight-frame window asks the model to diagnose error modes.
-"""
+"""VLN RGB-D waypoint actor with unified temporal scene understanding."""
 
 
 from __future__ import annotations
@@ -41,13 +33,11 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     CORRIDOR_LOCK_FORWARD_STEPS,
     DEFAULT_MODEL_PATH,
     ERROR_CONFIRMATION_WINDOW,
-    FINAL_TARGET_EVIDENCE_VOTES,
-    FINAL_TARGET_EVIDENCE_WINDOW,
-    FINAL_TARGET_MAX_WAYPOINT_DEPTH_M,
-    FINAL_TARGET_MIN_PATH_M,
+    FINAL_STOP_EVIDENCE_WINDOW,
     LANDMARK_HISTORY_SIZE,
     NavigationIntent,
     POINT_PROMPT,
+    PREVIEW_SELECTION_MIN_CONFIDENCE,
     RECOVERY_LATERAL_DISTANCE_M,
     SUBGOAL_GENERATION_ATTEMPTS,
     STRUCTURED_VLM_MAX_TOKENS,
@@ -127,8 +117,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._error_candidates: Deque[str] = deque(
             maxlen=ERROR_CONFIRMATION_WINDOW
         )
-        self._final_target_evidence: Deque[bool] = deque(
-            maxlen=FINAL_TARGET_EVIDENCE_WINDOW
+        self._final_stop_evidence: Deque[bool] = deque(
+            maxlen=FINAL_STOP_EVIDENCE_WINDOW
         )
         self._reset_runtime_state()
 
@@ -178,10 +168,18 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._corridor_heading_yaw_deg: Optional[float] = None
         self._subgoal_net_yaw_deg = 0.0
         self._turn_follow_phase_started = False
+        # A model-localized doorway is a stable physical target. Keep its
+        # world-space waypoint across steps instead of letting independent VLM
+        # calls move the target around while the follower is routing around
+        # furniture toward the opening.
+        self._doorway_waypoint: Optional[NavigationPoint] = None
+        self._doorway_waypoint_subgoal_id: Optional[str] = None
+        self._doorway_waypoint_best_distance_m: Optional[float] = None
+        self._doorway_waypoint_stagnant_steps = 0
         self._landmark_history.clear()
         self._behavior_history.clear()
-        self._final_target_evidence.clear()
         self._error_candidates.clear()
+        self._final_stop_evidence.clear()
 
     def act(
         self,
@@ -196,6 +194,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         depth_max_m: Optional[float] = None,
     ) -> NavigationDecision:
         """Run one step while retaining state transitions for debug output."""
+        act_started = time.perf_counter()
         # These flags describe only the waypoint selected during this call.
         # A recovery selection may set one of them below; clear both before
         # delegating to the RGB-D layer so a completed recovery cannot leak
@@ -236,18 +235,17 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 translation_m=translation_m,
                 yaw_delta_deg=yaw_delta_deg,
             )
-        landmark = self._track_landmark(
-            self.actor.as_rgb_array(rgb),
-            current,
-            translation_m=translation_m,
-            yaw_delta_deg=yaw_delta_deg,
-        )
         if isinstance(self.temporal_memory, TemporalMemory):
             self.temporal_memory.set_motion_evidence(
                 translation_m=translation_m,
                 yaw_delta_deg=yaw_delta_deg,
             )
-            self.temporal_memory.set_landmark_evidence(landmark)
+            self.temporal_memory.set_doorway_target_distance(
+                self._doorway_target_distance(
+                    current,
+                    camera_to_world=camera_to_world,
+                )
+            )
         try:
             decision = self._waypoint_decision(
                 rgb,
@@ -361,20 +359,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_subgoal_after = (
             current.subgoal_id if current is not None else None
         )
-        if self._should_stop_from_final_target_evidence(
-            decision,
-            current,
-        ):
-            self.last_waypoint_stop_disposition = (
-                "accepted_final_evidence_guard"
-            )
-            self.last_waypoint_applied_action_mode = "EXECUTION"
-            return NavigationDecision(
-                stop=True,
-                raw_response=(
-                    f"{decision.raw_response}; final target evidence guard"
-                ),
-            )
+        self.last_timings["total_ms"] = (
+            time.perf_counter() - act_started
+        ) * 1000
         return decision
 
     def act_on_preview(
@@ -424,23 +411,38 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
 
         image = self.actor.as_rgb_array(view.rgb)
         select_started = time.perf_counter()
-        self._select_pixel(
-            image,
-            instruction,
-            subgoal_context=(
-                self.task_memory.current_subgoal_context()
-                if self.task_memory is not None
-                else ""
-            ),
-            # All three constrain this second pass within one step: the error
-            # votes and the recovery hold were already consumed by ``act``, the
-            # surrounding views are already in hand, and a turn would be
-            # measured against the agent's facing rather than the rotated view
-            # this decision was made in.
-            evaluate_recovery=False,
-            allow_preview=False,
-            allow_turn=False,
-        )
+        selection = self.last_preview_selection
+        if (
+            selection is not None
+            and selection.confidence >= PREVIEW_SELECTION_MIN_CONFIDENCE
+        ):
+            # The selector already spent the one VLM call needed to resolve
+            # this PREVIEW. Commit to its selected floor point instead of
+            # asking the waypoint model to interpret the same heading again
+            # (which could request PREVIEW in a loop).
+            self._commit_selected_preview(
+                selection,
+                width=image.shape[1],
+                height=image.shape[0],
+            )
+        else:
+            self._select_pixel(
+                image,
+                instruction,
+                subgoal_context=(
+                    self.task_memory.current_subgoal_context()
+                    if self.task_memory is not None
+                    else ""
+                ),
+                # All three constrain this second pass within one step: the
+                # error votes and recovery hold were already consumed by
+                # ``act``, the surrounding views are already in hand, and a
+                # turn would be measured against the agent's real facing
+                # rather than the rotated preview view.
+                evaluate_recovery=False,
+                allow_preview=False,
+                allow_turn=False,
+            )
         timings = {
             "select_pixel_ms": (
                 time.perf_counter() - select_started
@@ -489,36 +491,57 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 ),
                 action_mode=self._applied_action_mode(),
             )
+        self._maybe_lock_doorway_waypoint(
+            point,
+            camera_to_world=view.camera_to_world,
+        )
         timings["waypoint_ms"] = (
             time.perf_counter() - waypoint_started
         ) * 1000
         self._record_timings(timings, started)
-        decision = NavigationDecision(
+        return NavigationDecision(
             stop=False,
             point=point,
             raw_response=self.last_model_response,
             action_mode=self._applied_action_mode(),
         )
-        # The PREVIEW half of this step cleared the near-target evidence, so
-        # run the guard here too; otherwise a previewed final approach could
-        # never accumulate the votes that end an episode.
-        current = (
-            self.task_memory.get_current_subgoal()
-            if self.task_memory is not None
-            else None
+
+    def _commit_selected_preview(
+        self,
+        selection: PreviewSelection,
+        *,
+        width: int,
+        height: int,
+    ) -> None:
+        """Turn one high-confidence preview target into a floor waypoint."""
+        intent: NavigationIntent = (
+            self._navigation_phase
+            if self._navigation_phase != "STOP"
+            else "FINAL_APPROACH"
         )
-        if self._should_stop_from_final_target_evidence(decision, current):
-            self.last_waypoint_stop_disposition = (
-                "accepted_final_evidence_guard"
-            )
-            self.last_waypoint_applied_action_mode = "EXECUTION"
-            return NavigationDecision(
-                stop=True,
-                raw_response=(
-                    f"{decision.raw_response}; final target evidence guard"
-                ),
-            )
-        return decision
+        raw_response = getattr(
+            getattr(self.temporal_memory, "captioner", None),
+            "last_preview_raw_response",
+            None,
+        )
+        self.last_model_response = raw_response or selection.evidence
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = intent
+        self.last_waypoint_applied_intent = intent
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_evidence = selection.evidence
+        self.last_waypoint_confidence = selection.confidence
+        self.last_waypoint_guard_reason = (
+            "committed directly to the Captioner-selected preview heading; "
+            "skipped redundant waypoint VLM"
+        )
+        self.last_requested_turn_deg = None
+        self.last_requested_normalized = (selection.u, selection.v)
+        self.last_requested_pixel = (
+            self._scale_normalized(selection.u, width),
+            self._scale_normalized(selection.v, height),
+        )
 
     def _waypoint_decision(
         self,
@@ -547,8 +570,27 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if self.task_memory is not None:
             self.task_memory.record_input(image)
             if self.temporal_memory is not None:
-                caption = self.temporal_memory.update_from_task_memory()
+                current_before_analysis = (
+                    self.task_memory.get_current_subgoal()
+                )
+                doorway_distance = self._doorway_target_distance(
+                    current_before_analysis,
+                    camera_to_world=camera_to_world,
+                )
+                # Completion cannot pass the structural-door guard while the
+                # camera is still far from the model-localized doorway. Keep
+                # every RGB/motion frame but avoid an expensive, guaranteed
+                # in-progress Captioner call until the threshold is near.
+                defer_scene_analysis = bool(
+                    doorway_distance is not None
+                    and doorway_distance > 1.25
+                )
+                caption = self.temporal_memory.update_from_task_memory(
+                    analyze=not defer_scene_analysis,
+                )
         self.last_caption = caption
+        if caption is not None:
+            self._record_scene_landmark(image, caption)
         timings.update({
             # Whole memory phase: frame copy, rule-based error detection, and
             # the Captioner call when Temporal Memory analyzes this step.
@@ -574,6 +616,22 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 stop=True,
                 raw_response=self.last_model_response,
             )
+
+        current = (
+            self.task_memory.get_current_subgoal()
+            if self.task_memory is not None
+            else None
+        )
+        locked = self._locked_doorway_decision(
+            current,
+            camera_to_world=camera_to_world,
+        )
+        if locked is not None:
+            timings["depth_ms"] = 0.0
+            timings["select_pixel_ms"] = 0.0
+            timings["waypoint_ms"] = 0.0
+            self._record_timings(timings, started)
+            return locked
 
         depth_started = time.perf_counter()
         depth_m = self.actor.depth_in_meters(
@@ -610,6 +668,13 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 raw_response=self.last_model_response,
                 action_mode="PREVIEW",
             )
+        if selected.stop:
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=True,
+                raw_response=self.last_model_response,
+                action_mode="EXECUTION",
+            )
         if selected.is_turn:
             # An in-place turn never reaches the RGB-D layer: there is no pixel
             # to snap and no point to back-project.
@@ -629,6 +694,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             intrinsics,
             camera_to_world,
         )
+        self._maybe_lock_doorway_waypoint(
+            point,
+            camera_to_world=camera_to_world,
+        )
         timings["waypoint_ms"] = (time.perf_counter() - waypoint_started) * 1000
         self._record_timings(timings, started)
         return NavigationDecision(
@@ -636,6 +705,154 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             point=point,
             raw_response=self.last_model_response,
             action_mode=self._applied_action_mode(),
+        )
+
+    @staticmethod
+    def _doorway_subgoal(subgoal: Optional[Subgoal]) -> bool:
+        if subgoal is None:
+            return False
+        return bool(
+            re.search(
+                r"\b(?:door|doorway|exit|threshold|cross)\b",
+                f"{subgoal.description} {subgoal.completion_criteria}",
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _maybe_lock_doorway_waypoint(
+        self,
+        point: NavigationPoint,
+        *,
+        camera_to_world: Any,
+    ) -> None:
+        current = (
+            self.task_memory.get_current_subgoal()
+            if self.task_memory is not None
+            else None
+        )
+        evidence = self.last_waypoint_evidence or ""
+        if not (
+            self._doorway_subgoal(current)
+            and (self.last_waypoint_confidence or 0.0) >= 0.85
+            and re.search(
+                r"\b(?:door|doorway|threshold|opening|exit)\b",
+                evidence,
+                flags=re.IGNORECASE,
+            )
+        ):
+            return
+        # Do not replace a still-active structural target with a fresh VLM
+        # projection. Near a doorway, small view changes can move the chosen
+        # pixel onto the far wall and produce a plausible but very distant
+        # world point. The existing target is released only by measured
+        # stagnation or by advancing to another subgoal.
+        if (
+            self._doorway_waypoint is not None
+            and self._doorway_waypoint_subgoal_id == current.subgoal_id
+        ):
+            return
+        self._doorway_waypoint = point
+        self._doorway_waypoint_subgoal_id = current.subgoal_id
+        distance_m = self._planar_waypoint_distance(
+            point,
+            camera_to_world=camera_to_world,
+        )
+        self._doorway_waypoint_best_distance_m = distance_m
+        self._doorway_waypoint_stagnant_steps = 0
+
+    def _clear_doorway_waypoint(self) -> None:
+        self._doorway_waypoint = None
+        self._doorway_waypoint_subgoal_id = None
+        self._doorway_waypoint_best_distance_m = None
+        self._doorway_waypoint_stagnant_steps = 0
+
+    @staticmethod
+    def _planar_waypoint_distance(
+        point: NavigationPoint,
+        *,
+        camera_to_world: Any,
+    ) -> float:
+        transform = np.asarray(camera_to_world, dtype=np.float64)
+        position_xz = transform[[0, 2], 3]
+        target_xz = np.asarray(point.world_xyz, dtype=np.float64)[[0, 2]]
+        return float(np.linalg.norm(target_xz - position_xz))
+
+    def _doorway_target_distance(
+        self,
+        current: Optional[Subgoal],
+        *,
+        camera_to_world: Any,
+    ) -> Optional[float]:
+        point = self._doorway_waypoint
+        current_id = current.subgoal_id if current is not None else None
+        if (
+            point is None
+            or current_id != self._doorway_waypoint_subgoal_id
+            or not self._doorway_subgoal(current)
+        ):
+            return None
+        return self._planar_waypoint_distance(
+            point,
+            camera_to_world=camera_to_world,
+        )
+
+    def _locked_doorway_decision(
+        self,
+        current: Optional[Subgoal],
+        *,
+        camera_to_world: Any,
+    ) -> Optional[NavigationDecision]:
+        point = self._doorway_waypoint
+        current_id = current.subgoal_id if current is not None else None
+        if (
+            point is None
+            or current_id != self._doorway_waypoint_subgoal_id
+            or not self._doorway_subgoal(current)
+        ):
+            if point is not None:
+                self._clear_doorway_waypoint()
+            return None
+        distance_m = self._planar_waypoint_distance(
+            point,
+            camera_to_world=camera_to_world,
+        )
+        # Reaching the localized threshold releases control to the policy, but
+        # keeps the target as completion evidence until Task Memory advances.
+        if distance_m <= 0.35:
+            return None
+        best = self._doorway_waypoint_best_distance_m
+        if best is None or distance_m < best - 0.10:
+            self._doorway_waypoint_best_distance_m = distance_m
+            self._doorway_waypoint_stagnant_steps = 0
+        else:
+            self._doorway_waypoint_stagnant_steps += 1
+        if self._doorway_waypoint_stagnant_steps >= 16:
+            self._clear_doorway_waypoint()
+            return None
+        intent: NavigationIntent = (
+            self._navigation_phase
+            if self._navigation_phase != "STOP"
+            else "APPROACH_LANDMARK"
+        )
+        self.last_model_response = "reusing locked doorway waypoint"
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = intent
+        self.last_waypoint_applied_intent = intent
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_confidence = 1.0
+        self.last_waypoint_evidence = (
+            "continuing toward the previously localized structural doorway"
+        )
+        self.last_waypoint_guard_reason = (
+            "reused stable doorway world waypoint; skipped waypoint VLM"
+        )
+        self.last_requested_turn_deg = None
+        return NavigationDecision(
+            stop=False,
+            point=point,
+            raw_response=self.last_model_response,
+            action_mode="EXECUTION",
         )
 
     def _applied_action_mode(self) -> ActionMode:
@@ -648,11 +865,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     ) -> int:
         """Deposit the views in working memory and read back the chosen one.
 
-        Depositing is what triggers the Captioner, so the selection is read
-        immediately afterwards.  When it declines — which it always does until
-        the Captioner side is implemented — fall back to the most forward view
-        and say so in the guard reason, so a placeholder is never mistaken for
-        a judgement in the logs.
+        Depositing triggers the Captioner, so the selection is read
+        immediately afterwards. If a replacement selector declines, fall back
+        to the most forward view and record that fallback in the guard reason.
         """
         forward_index = min(
             range(len(views)),
@@ -672,6 +887,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         selection = self.temporal_memory.preview_selection()
         self.last_preview_selection = selection
         if selection is not None:
+            # Direction is semantic: the widest free space may be the room we
+            # are meant to leave. Depth is still validated when the selected
+            # floor point is back-projected, but it must not replace the
+            # Captioner's chosen doorway or landmark view.
             return selection.view_index
 
         error = self.temporal_memory.last_preview_error()
@@ -690,72 +909,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     ) -> None:
         timings["total_ms"] = (time.perf_counter() - started) * 1000
         self.last_timings = timings
-
-    def _should_stop_from_final_target_evidence(
-        self,
-        decision: NavigationDecision,
-        current: Optional[Subgoal],
-    ) -> bool:
-        """Stop after repeated model-grounded near-field target evidence."""
-        if (
-            decision.stop
-            or decision.point is None
-            or current is None
-            or not self.subgoals
-            or current.subgoal_id != self.subgoals[-1].subgoal_id
-            or self._navigation_phase != "FINAL_APPROACH"
-            or self.last_waypoint_applied_intent != "FINAL_APPROACH"
-        ):
-            self._final_target_evidence.clear()
-            return False
-        evidence = (self.last_waypoint_evidence or "").lower()
-        final_subgoal = self.subgoals[-1]
-        final_text = (
-            f"{final_subgoal.description} "
-            f"{final_subgoal.completion_criteria}"
-        ).lower()
-        ignored_words = {
-            "agent", "and", "before", "camera", "complete", "completion",
-            "destination", "final", "has", "have", "into", "positioned",
-            "reach", "reached", "stop", "stopped", "stopping", "target",
-            "that", "the", "this", "with",
-        }
-        goal_words = {
-            word
-            for word in re.findall(r"[a-z][a-z-]+", final_text)
-            if len(word) >= 4 and word not in ignored_words
-        }
-        evidence_words = set(re.findall(r"[a-z][a-z-]+", evidence))
-        model_identifies_target = bool(
-            (
-                re.search(r"\b(target|destination)\b", evidence)
-                or goal_words.intersection(evidence_words)
-            )
-            and re.search(
-                r"\b(visible|appears?|near|close|beside|reached|inside|"
-                r"on|in front of|next to)\b",
-                evidence,
-            )
-        )
-        near_field = (
-            decision.point.depth_m
-            <= FINAL_TARGET_MAX_WAYPOINT_DEPTH_M
-        )
-        path_length_m = 0.0
-        if isinstance(self.temporal_memory, TemporalMemory):
-            frames = self.temporal_memory.recent_frames()
-            if frames:
-                path_length_m = frames[-1].subgoal_path_length_m
-        supported = (
-            model_identifies_target
-            and near_field
-            and path_length_m >= FINAL_TARGET_MIN_PATH_M
-        )
-        self._final_target_evidence.append(supported)
-        return (
-            self._final_target_evidence.count(True)
-            >= FINAL_TARGET_EVIDENCE_VOTES
-        )
 
     def _measure_motion(
         self,
@@ -820,6 +973,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         subgoal_id = subgoal.subgoal_id if subgoal is not None else None
         if subgoal_id != self._navigation_subgoal_id:
             self._navigation_subgoal_id = subgoal_id
+            self._final_stop_evidence.clear()
             self._corridor_forward_streak = 0
             self._corridor_heading_yaw_deg = None
             self._subgoal_net_yaw_deg = 0.0
@@ -1042,10 +1196,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                         enable_error_detection=True,
                         min_error_detection_frames=8,
                         max_image_edge=TEMPORAL_MAX_IMAGE_EDGE,
-                        # The error schema includes free-text evidence.  The
-                        # shared 64-token structured budget can truncate that
-                        # JSON before its closing brace.
-                        max_tokens=max(128, STRUCTURED_VLM_MAX_TOKENS),
+                        # One compact response now carries landmark,
+                        # completion, error, and final-target evidence.
+                        max_tokens=max(256, STRUCTURED_VLM_MAX_TOKENS),
                     ),
                 ),
                 task_memory=self.task_memory,

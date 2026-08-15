@@ -14,6 +14,8 @@ from .protocol import (
     CORRIDOR_WAYPOINT_DEVIATION,
     ERROR_CONFIDENCE_THRESHOLD,
     ERROR_CONFIRMATION_VOTES,
+    FINAL_STOP_EVIDENCE_VOTES,
+    FINAL_STOP_MIN_CONFIDENCE,
     POINT_PROMPT,
     RECOVERY_FORWARD_U,
     RECOVERY_FORWARD_V,
@@ -35,6 +37,72 @@ from .protocol import (
 
 class WaypointPolicyMixin:
     """Validated waypoint inference, guards, and deterministic recovery."""
+
+    def _final_stop_is_visually_grounded(
+        self,
+        waypoint: _WaypointOutput,
+        current: Any,
+    ) -> bool:
+        """Validate one final STOP proposal against its current-frame text.
+
+        The waypoint model sees the current full-resolution frame, whereas the
+        temporal Captioner sees a resized history window.  A repeated waypoint
+        STOP may therefore resolve a final arrival that the history model
+        misses.  Require the final subgoal, high confidence, the named target,
+        an affirmative near-field relation, and no distance/negation language.
+        """
+        if (
+            not waypoint.stop
+            or current is None
+            or not self.subgoals
+            or current.subgoal_id != self.subgoals[-1].subgoal_id
+            or self._navigation_phase != "FINAL_APPROACH"
+            or waypoint.confidence < FINAL_STOP_MIN_CONFIDENCE
+        ):
+            return False
+
+        evidence = waypoint.evidence.lower()
+        final_text = (
+            f"{current.description} {current.completion_criteria}"
+        ).lower()
+        ignored_words = {
+            "agent", "approach", "area", "camera", "complete",
+            "completion", "destination", "directly", "final", "forward",
+            "immediate", "other", "positioned", "reach", "reached",
+            "stop", "stopping", "target", "visible", "walk", "with",
+        }
+        goal_words = {
+            word
+            for word in re.findall(r"[a-z][a-z-]+", final_text)
+            if len(word) >= 4 and word not in ignored_words
+        }
+        names_target = bool(
+            goal_words.intersection(
+                re.findall(r"[a-z][a-z-]+", evidence)
+            )
+        )
+        near_field = bool(
+            re.search(
+                r"\b(?:directly beside|next to|at immediate (?:foreground|"
+                r"stopping distance)|in the immediate foreground|"
+                r"positioned beside|reached the immediate foreground|"
+                r"has reached|have reached|destination reached|target reached)\b",
+                evidence,
+            )
+            or (
+                re.search(r"\b(?:beside|next to)\b", evidence)
+                and re.search(r"\b(?:camera|agent|positioned|directly)\b", evidence)
+            )
+        )
+        contradicted = bool(
+            re.search(
+                r"\b(?:not yet|has not|have not|still approaching|distant|"
+                r"far away|in the distance|through (?:a |the )?"
+                r"(?:door|doorway|opening))\b",
+                evidence,
+            )
+        )
+        return names_target and near_field and not contradicted
 
     def _recovery_mode_for_step(self) -> Optional[str]:
         caption = self.last_caption
@@ -59,7 +127,17 @@ class WaypointPolicyMixin:
             self.last_error_candidate = self._active_recovery_mode
             self.last_error_guard_reason = "continuing confirmed recovery"
             return self._consume_active_recovery()
-    
+
+        grounded_mode, grounded_reason = (
+            self._motion_grounded_error_candidate(caption.error_mode)
+        )
+        if grounded_mode in {"TURN_OSCILLATION", "IN_PLACE_SPIN"}:
+            self.last_error_candidate = grounded_mode
+            self.last_error_guard_reason = grounded_reason
+            self._active_recovery_mode = grounded_mode
+            self._recovery_steps_remaining = RECOVERY_HOLD_STEPS
+            return self._consume_active_recovery()
+
         candidate = "NONE"
         if not caption.error:
             self.last_error_guard_reason = "model reported no error"
@@ -281,6 +359,9 @@ class WaypointPolicyMixin:
                     else "Corridor heading lock: not active."
                 ),
                 self._landmark_context_for_waypoint(current),
+                "If the current landmark is visible, steer to a visible floor "
+                "point beneath it. Do not turn away from or PREVIEW a landmark "
+                "that is already localized in the image.",
                 self._behavior_context(),
                 "Use the current image as the source of truth. Landmark and "
                 "behavior histories are supporting context.",
@@ -320,6 +401,24 @@ class WaypointPolicyMixin:
                 payload = self._extract_json_object(
                     self.last_model_response
                 )
+                execution = payload.get("execution")
+                if isinstance(execution, dict):
+                    intent = execution.get("intent")
+                    turn_deg = execution.get("turn_deg")
+                    if (
+                        intent in {"TURN_LEFT", "TURN_RIGHT"}
+                        and isinstance(turn_deg, int)
+                        and not isinstance(turn_deg, bool)
+                    ):
+                        # JoyAI occasionally names the direction correctly but
+                        # emits an unsigned positive magnitude for TURN_LEFT.
+                        # Normalize that redundant sign instead of spending a
+                        # second VLM call on an otherwise valid decision.
+                        execution["turn_deg"] = (
+                            abs(turn_deg)
+                            if intent == "TURN_RIGHT"
+                            else -abs(turn_deg)
+                        )
                 waypoint = parse_actor_output(
                     payload,
                     preview_intent=safe_phase,
@@ -360,14 +459,69 @@ class WaypointPolicyMixin:
         self.last_waypoint_applied_action_mode = waypoint.action_mode
         self.last_waypoint_evidence = waypoint.evidence
         self.last_waypoint_confidence = waypoint.confidence
+        landmark = self.last_landmark
+        landmark_guides_motion = bool(
+            current is not None
+            and landmark is not None
+            and self._landmark_subgoal_id == current.subgoal_id
+            and landmark.visible
+            and landmark.confidence >= 0.60
+            and self._navigation_phase
+            in {"APPROACH_LANDMARK", "FINAL_APPROACH"}
+            and (
+                waypoint.action_mode == "PREVIEW"
+                or waypoint.is_turn
+                or waypoint.stop
+                or waypoint.confidence < 0.10
+            )
+        )
+        if landmark_guides_motion:
+            if landmark.direction in {"LEFT", "RIGHT"}:
+                turn_right = landmark.direction == "RIGHT"
+                applied_intent = (
+                    "TURN_RIGHT" if turn_right else "TURN_LEFT"
+                )
+                waypoint = waypoint.model_copy(
+                    update={
+                        "stop": False,
+                        "intent": applied_intent,
+                        "action_mode": "EXECUTION",
+                        "turn_deg": 15 if turn_right else -15,
+                        "u": None,
+                        "v": None,
+                    }
+                )
+                guard_action = (
+                    f"a measured {landmark.direction.lower()} turn"
+                )
+            else:
+                applied_intent = self._navigation_phase
+                waypoint = waypoint.model_copy(
+                    update={
+                        "stop": False,
+                        "intent": applied_intent,
+                        "action_mode": "EXECUTION",
+                        "turn_deg": None,
+                        "u": 500,
+                        "v": 750,
+                    }
+                )
+                guard_action = "a centered floor waypoint"
+            self.last_waypoint_applied_intent = applied_intent
+            self.last_waypoint_applied_action_mode = "EXECUTION"
+            self.last_waypoint_guard_reason = (
+                "replaced an unresolved waypoint proposal with "
+                f"{guard_action} toward the already visible active landmark"
+            )
         if waypoint.action_mode == "PREVIEW":
             if allow_preview:
                 # PREVIEW deliberately carries no action: the controller renders
                 # the surrounding views and calls back. The guards below rewrite
                 # where the agent goes, so they have nothing to act on here.
-                self.last_waypoint_guard_reason = (
-                    "preview requested; no action produced this step"
-                )
+                if self.last_waypoint_guard_reason is None:
+                    self.last_waypoint_guard_reason = (
+                        "preview requested; no action produced this step"
+                    )
                 return waypoint
             # The views are already in hand, so asking again would loop the
             # controller. Commit to a safe waypoint in the chosen view instead.
@@ -479,6 +633,25 @@ class WaypointPolicyMixin:
                 and self.subgoals
                 and current.subgoal_id == self.subgoals[-1].subgoal_id
             )
+            supported_stop = self._final_stop_is_visually_grounded(
+                waypoint,
+                current,
+            )
+            self._final_stop_evidence.append(supported_stop)
+            if (
+                supported_stop
+                and self._final_stop_evidence.count(True)
+                >= FINAL_STOP_EVIDENCE_VOTES
+            ):
+                self.last_waypoint_stop_disposition = (
+                    "accepted_repeated_visual_final"
+                )
+                self.last_waypoint_guard_reason = (
+                    "accepted repeated high-confidence current-frame STOP "
+                    "evidence at the final target"
+                )
+                self.last_waypoint_applied_intent = "STOP"
+                return waypoint
             self.last_waypoint_stop_disposition = (
                 "deferred_unverified_final"
                 if on_final_subgoal
@@ -504,6 +677,11 @@ class WaypointPolicyMixin:
             self.last_model_response = (
                 f"{self.last_model_response} [STOP deferred]"
             )
+        else:
+            # The bounded vote window tracks model observations, not simulator
+            # steps. Deterministic recovery returns before reaching this path
+            # and therefore cannot erase otherwise consecutive visual votes.
+            self._final_stop_evidence.append(False)
 
         if waypoint.is_turn:
             # An in-place turn has no image coordinates: the controller repeats
