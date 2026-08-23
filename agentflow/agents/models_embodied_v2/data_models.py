@@ -41,9 +41,10 @@ ActionMode = Literal["PREVIEW", "EXPLORATION", "EXECUTION"]
 # ``habitat.simulator.turn_angle``: a requested turn is executed as whole
 # repeats of that primitive, so a mismatch would silently round every turn.
 TURN_STEP_DEG = 15
-# Beyond half a circle the other direction is always shorter, and at 15 degrees
-# a step, 180 degrees already costs twelve of them.
-MAX_TURN_DEG = 180
+# Keep explicit turns inside one short observation horizon.  The actor observes
+# again after at most three Habitat turn primitives instead of committing to a
+# long open-loop rotation that can pass a newly visible doorway.
+MAX_TURN_DEG = 45
 
 
 class TemporalInputError(ValueError):

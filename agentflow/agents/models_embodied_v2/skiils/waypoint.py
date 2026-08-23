@@ -16,10 +16,11 @@ from .protocol import (
     ERROR_CONFIRMATION_VOTES,
     FINAL_STOP_EVIDENCE_VOTES,
     FINAL_STOP_MIN_CONFIDENCE,
+    MAX_TURN_DEG,
     POINT_PROMPT,
     RECOVERY_FORWARD_U,
     RECOVERY_FORWARD_V,
-    RECOVERY_HOLD_STEPS,
+    RECOVERY_SUCCESS_TRANSLATION_M,
     RECOVERY_TURN_U,
     RECOVERY_TURN_V,
     STALL_EVIDENCE_FRAMES,
@@ -106,37 +107,52 @@ class WaypointPolicyMixin:
 
     def _recovery_mode_for_step(self) -> Optional[str]:
         caption = self.last_caption
-        if caption is None:
-            self.last_error_candidate = None
-            self.last_error_guard_reason = "captioner did not return a result"
-            return self._consume_active_recovery()
-        if caption.completed:
+        if caption is not None and caption.completed:
             self._error_candidates.clear()
             self._active_recovery_mode = None
-            self._recovery_steps_remaining = 0
+            self._recovery_progress_m = 0.0
+            self._recovery_attempt_steps = 0
+            self._recovery_anchor_position_xz = None
             self.last_error_candidate = None
             self.last_error_guard_reason = "subgoal completed"
             return None
-    
-        if self._error_candidate_subgoal != caption.subgoal_id:
+
+        if (
+            caption is not None
+            and self._error_candidate_subgoal != caption.subgoal_id
+        ):
             self._error_candidates.clear()
             self._active_recovery_mode = None
-            self._recovery_steps_remaining = 0
+            self._recovery_progress_m = 0.0
+            self._recovery_attempt_steps = 0
+            self._recovery_anchor_position_xz = None
             self._error_candidate_subgoal = caption.subgoal_id
-        if self._recovery_steps_remaining > 0:
+        if self._active_recovery_mode is not None:
             self.last_error_candidate = self._active_recovery_mode
-            self.last_error_guard_reason = "continuing confirmed recovery"
-            return self._consume_active_recovery()
+            self.last_error_guard_reason = (
+                "continuing confirmed recovery until measured translation "
+                f"reaches {RECOVERY_SUCCESS_TRANSLATION_M:.2f}m"
+            )
+            return self._active_recovery_mode
 
-        grounded_mode, grounded_reason = (
-            self._motion_grounded_error_candidate(caption.error_mode)
+        # Oscillation and spinning are fully observable from camera poses. Run
+        # this before requiring a Captioner result so deferred scene analysis
+        # cannot disable motion recovery while following a locked doorway.
+        grounded_mode, grounded_reason = self._motion_grounded_error_candidate(
+            caption.error_mode if caption is not None else "NONE"
         )
         if grounded_mode in {"TURN_OSCILLATION", "IN_PLACE_SPIN"}:
             self.last_error_candidate = grounded_mode
             self.last_error_guard_reason = grounded_reason
-            self._active_recovery_mode = grounded_mode
-            self._recovery_steps_remaining = RECOVERY_HOLD_STEPS
-            return self._consume_active_recovery()
+            self._start_recovery(grounded_mode)
+            return grounded_mode
+
+        if caption is None:
+            self.last_error_candidate = None
+            self.last_error_guard_reason = (
+                "captioner did not return a result; " + grounded_reason
+            )
+            return None
 
         candidate = "NONE"
         if not caption.error:
@@ -171,20 +187,82 @@ class WaypointPolicyMixin:
             None,
         )
         if confirmed is not None:
-            self._active_recovery_mode = confirmed
-            self._recovery_steps_remaining = RECOVERY_HOLD_STEPS
-    
-        return self._consume_active_recovery()
-    
-    def _consume_active_recovery(self) -> Optional[str]:
-        if self._recovery_steps_remaining <= 0:
-            return None
-        mode = self._active_recovery_mode
-        self._recovery_steps_remaining -= 1
-        if self._recovery_steps_remaining == 0:
-            self._active_recovery_mode = None
-            self._error_candidates.clear()
-        return mode
+            self._start_recovery(confirmed)
+
+        return self._active_recovery_mode
+
+    def _start_recovery(self, mode: str) -> None:
+        """Keep one recovery active until its motion is observed to succeed."""
+        self._active_recovery_mode = mode
+        self._recovery_progress_m = 0.0
+        self._recovery_attempt_steps = 0
+        self._recovery_anchor_position_xz = (
+            None
+            if self._previous_position is None
+            else self._previous_position[[0, 2]].copy()
+        )
+
+    def _update_recovery_progress(self, translation_m: float) -> None:
+        """Release recovery only after a real displacement, never by timeout."""
+        if self._active_recovery_mode is None:
+            return
+        self._recovery_attempt_steps += 1
+        if (
+            self._recovery_anchor_position_xz is not None
+            and self._previous_position is not None
+        ):
+            self._recovery_progress_m = float(np.linalg.norm(
+                self._previous_position[[0, 2]]
+                - self._recovery_anchor_position_xz
+            ))
+        else:
+            self._recovery_progress_m += max(float(translation_m), 0.0)
+        if self._recovery_progress_m < RECOVERY_SUCCESS_TRANSLATION_M:
+            return
+        self._active_recovery_mode = None
+        self._recovery_progress_m = 0.0
+        self._recovery_attempt_steps = 0
+        self._recovery_anchor_position_xz = None
+        self._error_candidates.clear()
+
+    def _depth_guided_recovery_waypoint(
+        self,
+        depth_m: Optional[np.ndarray],
+        *,
+        width: int,
+        height: int,
+    ) -> tuple[int, int]:
+        """Choose the lower-image direction with the strongest depth clearance."""
+        if depth_m is None or depth_m.shape != (height, width):
+            return RECOVERY_FORWARD_U, RECOVERY_FORWARD_V
+
+        top = max(int(height * 0.55), 0)
+        bottom = max(min(int(height * 0.90), height), top + 1)
+        half_width = max(int(width * 0.08), 1)
+        candidates = (200, 350, 500, 650, 800)
+        scored: list[tuple[float, int]] = []
+        for normalized_u in candidates:
+            center_u = self._scale_normalized(normalized_u, width)
+            left = max(center_u - half_width, 0)
+            right = min(center_u + half_width + 1, width)
+            patch = depth_m[top:bottom, left:right]
+            valid = patch[
+                np.isfinite(patch)
+                & (patch >= self.actor.min_depth_m)
+                & (patch <= self.actor.max_depth_m)
+            ]
+            if valid.size == 0:
+                continue
+            # A lower quantile rewards a broadly clear band rather than one
+            # isolated far-depth pixel.  A small centre bias prevents needless
+            # steering when several directions are equally open.
+            clearance = float(np.quantile(valid, 0.35))
+            centre_bias = 0.10 * (1.0 - abs(normalized_u - 500) / 500.0)
+            scored.append((clearance + centre_bias, normalized_u))
+        if not scored:
+            return RECOVERY_TURN_U, RECOVERY_TURN_V
+        _, best_u = max(scored, key=lambda item: (item[0], -abs(item[1] - 500)))
+        return best_u, RECOVERY_FORWARD_V
     
     def _motion_grounded_error_candidate(
         self,
@@ -241,6 +319,7 @@ class WaypointPolicyMixin:
         evaluate_recovery: bool = True,
         allow_preview: bool = True,
         allow_turn: bool = True,
+        depth_m: Optional[np.ndarray] = None,
     ) -> _WaypointOutput:
         """Return this step's decision, with model STOP deferred.
 
@@ -299,17 +378,15 @@ class WaypointPolicyMixin:
                 else "APPROACH_LANDMARK"
             )
             fixed_mode = recovery_mode
-            force_forward = recovery_mode in (
-                "TURN_OSCILLATION",
-                "IN_PLACE_SPIN",
+            recovery_u, recovery_v = self._depth_guided_recovery_waypoint(
+                depth_m,
+                width=width,
+                height=height,
             )
             evidence = (
                 f"action-level {fixed_mode} recovery: "
-                + (
-                    "hold a stable lower-center forward waypoint"
-                    if force_forward
-                    else "hold a stable left-side turn waypoint"
-                )
+                "keep recovery active until measured translation succeeds; "
+                f"depth-selected waypoint=({recovery_u},{recovery_v})"
             )
             synthetic = _WaypointOutput(
                 stop=False,
@@ -317,8 +394,8 @@ class WaypointPolicyMixin:
                 # A confirmed recovery is a forced deterministic action; there
                 # is nothing for the controller to preview or explore first.
                 action_mode="EXECUTION",
-                u=RECOVERY_FORWARD_U if force_forward else RECOVERY_TURN_U,
-                v=RECOVERY_FORWARD_V if force_forward else RECOVERY_TURN_V,
+                u=recovery_u,
+                v=recovery_v,
                 confidence=1.0,
                 evidence=evidence,
             )
@@ -342,8 +419,11 @@ class WaypointPolicyMixin:
                 self._scale_normalized(synthetic.u, width),
                 self._scale_normalized(synthetic.v, height),
             )
-            self._force_forward_this_step = force_forward
-            self._force_left_turn_this_step = not force_forward
+            # Let the RGB-D waypoint and follower steer toward the clearest
+            # measured direction.  Forcing a primitive here would discard the
+            # depth evidence and can repeatedly drive into the same obstacle.
+            self._force_forward_this_step = False
+            self._force_left_turn_this_step = False
             return synthetic
         prompt = "\n".join(
             (
@@ -363,6 +443,14 @@ class WaypointPolicyMixin:
                 "point beneath it. Do not turn away from or PREVIEW a landmark "
                 "that is already localized in the image.",
                 self._behavior_context(),
+                (
+                    "Preview state: surrounding headings were just inspected; "
+                    "commit to an action from that information and do not "
+                    "request PREVIEW again this step."
+                    if getattr(self, "_preview_requires_progress", False)
+                    else "Preview state: available when active perception is "
+                    "needed at a blind corner or route decision point."
+                ),
                 "Use the current image as the source of truth. Landmark and "
                 "behavior histories are supporting context.",
                 "Return normalized coordinates in the fixed 0..1000 "
@@ -379,8 +467,10 @@ class WaypointPolicyMixin:
             else "FINAL_APPROACH"
         )
         last_error: Optional[Exception] = None
+        clamped_turn_from: Optional[int] = None
         response: Any = ""
         for attempt in range(WAYPOINT_GENERATION_ATTEMPTS):
+            candidate_clamped_from: Optional[int] = None
             attempt_prompt = prompt
             if attempt:
                 attempt_prompt += (
@@ -414,15 +504,24 @@ class WaypointPolicyMixin:
                         # emits an unsigned positive magnitude for TURN_LEFT.
                         # Normalize that redundant sign instead of spending a
                         # second VLM call on an otherwise valid decision.
-                        execution["turn_deg"] = (
+                        signed_turn = (
                             abs(turn_deg)
                             if intent == "TURN_RIGHT"
                             else -abs(turn_deg)
                         )
+                        if abs(signed_turn) > MAX_TURN_DEG:
+                            candidate_clamped_from = signed_turn
+                            signed_turn = (
+                                MAX_TURN_DEG
+                                if signed_turn > 0
+                                else -MAX_TURN_DEG
+                            )
+                        execution["turn_deg"] = signed_turn
                 waypoint = parse_actor_output(
                     payload,
                     preview_intent=safe_phase,
                 )
+                clamped_turn_from = candidate_clamped_from
                 break
             except Exception as exc:
                 last_error = exc
@@ -459,6 +558,12 @@ class WaypointPolicyMixin:
         self.last_waypoint_applied_action_mode = waypoint.action_mode
         self.last_waypoint_evidence = waypoint.evidence
         self.last_waypoint_confidence = waypoint.confidence
+        if clamped_turn_from is not None:
+            self.last_waypoint_guard_reason = (
+                f"clamped model turn {clamped_turn_from:+d}deg to "
+                f"{waypoint.turn_deg:+d}deg so the camera re-observes after "
+                "a short rotation"
+            )
         landmark = self.last_landmark
         landmark_guides_motion = bool(
             current is not None
@@ -514,7 +619,10 @@ class WaypointPolicyMixin:
                 f"{guard_action} toward the already visible active landmark"
             )
         if waypoint.action_mode == "PREVIEW":
-            if allow_preview:
+            preview_on_cooldown = bool(
+                getattr(self, "_preview_requires_progress", False)
+            )
+            if allow_preview and not preview_on_cooldown:
                 # PREVIEW deliberately carries no action: the controller renders
                 # the surrounding views and calls back. The guards below rewrite
                 # where the agent goes, so they have nothing to act on here.
@@ -530,7 +638,10 @@ class WaypointPolicyMixin:
             )
             self.last_waypoint_applied_action_mode = "EXECUTION"
             self.last_waypoint_guard_reason = (
-                "preview requested again after the views were provided; "
+                "preview requested again immediately after surrounding views "
+                "were inspected; committed to a safe waypoint instead"
+                if preview_on_cooldown
+                else "preview requested again after the views were provided; "
                 "committed to a safe waypoint instead"
             )
         if waypoint.is_turn and not allow_turn:

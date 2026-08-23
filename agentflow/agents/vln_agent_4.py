@@ -37,6 +37,7 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     LANDMARK_HISTORY_SIZE,
     NavigationIntent,
     POINT_PROMPT,
+    PREVIEW_REARM_TRANSLATION_M,
     PREVIEW_SELECTION_MIN_CONFIDENCE,
     RECOVERY_LATERAL_DISTANCE_M,
     SUBGOAL_GENERATION_ATTEMPTS,
@@ -143,6 +144,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_preview_yaw_deg: Optional[float] = None
         self.last_preview_selection: Optional[PreviewSelection] = None
         self.last_preview_guard_reason: Optional[str] = None
+        # A preview stays consumed at this physical position until the camera
+        # has made real translational progress. Rotation alone must not re-arm
+        # another relative-heading preview.
+        self._preview_requires_progress = False
+        self._preview_anchor_position_xz: Optional[np.ndarray] = None
         self.last_waypoint_guard_reason: Optional[str] = None
         self.last_waypoint_evidence: Optional[str] = None
         self.last_waypoint_confidence: Optional[float] = None
@@ -157,7 +163,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._landmark_subgoal_id: Optional[str] = None
         self._error_candidate_subgoal: Optional[str] = None
         self._active_recovery_mode: Optional[str] = None
-        self._recovery_steps_remaining = 0
+        self._recovery_progress_m = 0.0
+        self._recovery_attempt_steps = 0
+        self._recovery_anchor_position_xz: Optional[np.ndarray] = None
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
         self._previous_position: Optional[np.ndarray] = None
@@ -221,6 +229,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             camera_to_world
         )
         if had_previous_pose:
+            self._update_preview_progress()
+            self._update_recovery_progress(translation_m)
             self._record_behavior(
                 subgoal_id=self.last_subgoal_before,
                 translation_m=translation_m,
@@ -403,8 +413,17 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # the first half may leak into it.
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
+        view_transform = np.asarray(views[0].camera_to_world, dtype=np.float64)
+        self._preview_requires_progress = True
+        self._preview_anchor_position_xz = view_transform[[0, 2], 3].copy()
 
+        preview_select_started = time.perf_counter()
         view_index = self._selected_preview_view(views)
+        timings = {
+            "preview_select_ms": (
+                time.perf_counter() - preview_select_started
+            ) * 1000
+        }
         view = views[view_index]
         self.last_preview_view_index = view_index
         self.last_preview_yaw_deg = view.yaw_deg
@@ -443,11 +462,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 allow_preview=False,
                 allow_turn=False,
             )
-        timings = {
-            "select_pixel_ms": (
-                time.perf_counter() - select_started
-            ) * 1000
-        }
+        timings["select_pixel_ms"] = (
+            time.perf_counter() - select_started
+        ) * 1000
         # With previews and turns both refused above, the only outcome left is
         # a waypoint inside the chosen view.
         requested_uv = self.last_requested_pixel
@@ -622,6 +639,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             if self.task_memory is not None
             else None
         )
+        self._release_doorway_waypoint_for_motion(
+            current,
+            camera_to_world=camera_to_world,
+        )
         locked = self._locked_doorway_decision(
             current,
             camera_to_world=camera_to_world,
@@ -655,6 +676,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 if self.task_memory is not None
                 else ""
             ),
+            depth_m=depth_m,
         )
         timings["select_pixel_ms"] = (
             time.perf_counter() - select_started
@@ -765,6 +787,36 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._doorway_waypoint_subgoal_id = None
         self._doorway_waypoint_best_distance_m = None
         self._doorway_waypoint_stagnant_steps = 0
+
+    def _release_doorway_waypoint_for_motion(
+        self,
+        current: Optional[Subgoal],
+        *,
+        camera_to_world: Any,
+    ) -> None:
+        """Drop a locked door target as soon as measured motion loops.
+
+        A locked waypoint bypasses the waypoint VLM, so its motion recovery
+        must run before the lock's early return. The ordinary waypoint path
+        then consumes the same grounded mode and emits its deterministic
+        recovery action during this step.
+        """
+        if self._doorway_target_distance(
+            current,
+            camera_to_world=camera_to_world,
+        ) is None:
+            return
+        mode, reason = self._motion_grounded_error_candidate("NONE")
+        # Four stalled motion intervals distinguish a legitimate short doorway
+        # alignment from a same-sign spin, so both loop modes invalidate the
+        # locked target.
+        if mode not in {"TURN_OSCILLATION", "IN_PLACE_SPIN"}:
+            return
+        self._clear_doorway_waypoint()
+        self.last_error_candidate = mode
+        self.last_error_guard_reason = (
+            f"released locked doorway waypoint: {reason}"
+        )
 
     @staticmethod
     def _planar_waypoint_distance(
@@ -942,6 +994,22 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._previous_yaw_deg = yaw_deg
         return translation_m, yaw_delta_deg
 
+    def _update_preview_progress(self) -> None:
+        """Re-arm PREVIEW only after net displacement from its anchor."""
+        if (
+            not self._preview_requires_progress
+            or self._preview_anchor_position_xz is None
+            or self._previous_position is None
+        ):
+            return
+        displacement = float(np.linalg.norm(
+            self._previous_position[[0, 2]] - self._preview_anchor_position_xz
+        ))
+        if displacement < PREVIEW_REARM_TRANSLATION_M:
+            return
+        self._preview_requires_progress = False
+        self._preview_anchor_position_xz = None
+
     def _phase_for_subgoal(
         self,
         subgoal: Optional[Subgoal],
@@ -973,6 +1041,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         subgoal_id = subgoal.subgoal_id if subgoal is not None else None
         if subgoal_id != self._navigation_subgoal_id:
             self._navigation_subgoal_id = subgoal_id
+            # A new stage can introduce a new turn or landmark at the same
+            # physical position, so an earlier stage's preview must not block
+            # it from looking around.
+            self._preview_requires_progress = False
+            self._preview_anchor_position_xz = None
             self._final_stop_evidence.clear()
             self._corridor_forward_streak = 0
             self._corridor_heading_yaw_deg = None

@@ -35,12 +35,13 @@ ERROR_CONFIRMATION_VOTES = 4
 FINAL_STOP_EVIDENCE_WINDOW = 5
 FINAL_STOP_EVIDENCE_VOTES = 2
 FINAL_STOP_MIN_CONFIDENCE = 0.90
-RECOVERY_HOLD_STEPS = 2
 RECOVERY_FORWARD_U = 500
 RECOVERY_FORWARD_V = 750
 RECOVERY_TURN_U = 250
 RECOVERY_TURN_V = 500
 RECOVERY_LATERAL_DISTANCE_M = 1.5
+RECOVERY_SUCCESS_TRANSLATION_M = 0.20
+PREVIEW_REARM_TRANSLATION_M = 0.25
 PREVIEW_SELECTION_MIN_CONFIDENCE = 0.60
 STALL_EVIDENCE_FRAMES = 4
 STALL_TRANSLATION_LIMIT_M = 0.20
@@ -83,8 +84,16 @@ First decide this step's action mode, and write it as the first field:
   reveal it; move to gather information rather than to advance a known route.
 - PREVIEW: the current image cannot resolve the direction and the answer is
   likely outside this field of view; ask to inspect the surrounding views.
-Prefer EXECUTION. Choose PREVIEW only when looking around is the only way to
-make progress: it returns no motion and costs a step.
+PREVIEW is active perception, not an error fallback. Choose it proactively at
+a reached blind corner, corridor end, T/L junction, doorway threshold, or
+multi-branch decision point when the required continuation may be outside the
+current field of view or an occluding wall hides what is around the corner.
+Also choose it when two or more route branches are plausible and the current
+image cannot distinguish which one matches the instruction. Do not preview in
+a single unambiguous corridor, when the required opening or landmark and a
+floor path to it are already visible, or merely because the target is distant.
+One preview inspects the surrounding headings simultaneously, so do not ask
+for repeated previews without first making navigational progress.
 
 EXECUTION and EXPLORATION also need a navigation intent:
 - FOLLOW_CORRIDOR: continue through the main corridor; do not enter side rooms.
@@ -104,8 +113,9 @@ u=1000 is the right edge, v=0 is the top, and v=1000 is the bottom.
 
 turn_deg is a multiple of 15: positive turns right, negative turns left. It must
 agree with the intent, so TURN_RIGHT takes a positive value and TURN_LEFT a
-negative one. Every 15 degrees costs one step, so ask for the smallest turn that
-does the job.
+negative one. Never request more than 45 degrees in one decision. The camera
+will observe again after that short turn, so ask only for the smallest turn that
+brings the route into view.
 
 Reply only with one exact JSON object, in one of these four shapes:
 {"action_mode":"EXECUTION","execution":{"stop":false,"intent":"FOLLOW_CORRIDOR","u":integer,"v":integer},"confidence":0.0,"evidence":"brief visual reason"}
