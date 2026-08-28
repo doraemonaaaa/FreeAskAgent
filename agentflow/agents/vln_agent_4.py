@@ -35,6 +35,7 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     ERROR_CONFIRMATION_WINDOW,
     FINAL_STOP_EVIDENCE_WINDOW,
     LANDMARK_HISTORY_SIZE,
+    LANDMARK_STEER_MIN_CONFIDENCE,
     NavigationIntent,
     POINT_PROMPT,
     PREVIEW_REARM_TRANSLATION_M,
@@ -47,6 +48,7 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     TURN_ALIGNMENT_DEG,
     TURN_EVIDENCE_DEG,
     LandmarkOutput as _LandmarkOutput,
+    WaypointOutput as _WaypointOutput,
 )
 from agentflow.agents.models_embodied_v2.skiils.planning import parse_subgoal_plan
 from agentflow.agents.models_embodied_v2.skiils.landmark import LandmarkTrackerMixin
@@ -69,6 +71,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         max_depth_m=10.0,
         patch_radius_px=3,
         max_patch_depth_spread_m=0.35,
+        camera_height_m=None,
+        max_floor_offset_m=0.30,
         task_memory=None,
         temporal_memory=None,
         **kwargs,
@@ -85,6 +89,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             max_depth_m=max_depth_m,
             patch_radius_px=patch_radius_px,
             max_patch_depth_spread_m=max_patch_depth_spread_m,
+            camera_height_m=camera_height_m,
+            max_floor_offset_m=max_floor_offset_m,
         )
         # The landmark and waypoint policies prompt the same checkpoint.
         self.llm = self.actor.llm
@@ -681,6 +687,12 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         timings["select_pixel_ms"] = (
             time.perf_counter() - select_started
         ) * 1000
+        selected = self._steer_to_visible_landmark(
+            selected,
+            current,
+            width=image.shape[1],
+            height=image.shape[0],
+        )
         if selected.action_mode == "PREVIEW":
             # PREVIEW carries no action by design: the controller renders the
             # surrounding views and calls back, so this is not a stop.
@@ -729,6 +741,77 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             action_mode=self._applied_action_mode(),
         )
 
+    def _steer_to_visible_landmark(
+        self,
+        selected: _WaypointOutput,
+        current: Optional[Subgoal],
+        *,
+        width: int,
+        height: int,
+    ) -> _WaypointOutput:
+        """Walk toward a landmark the Captioner has already located.
+
+        The waypoint model reliably asks to TURN or PREVIEW when the doorway
+        sits off-centre in the image, even though its prompt tells it to
+        steer to the floor beneath a visible landmark. When the Captioner
+        reported that landmark in this same image, the geometry is already
+        known: the requested pixel becomes the landmark's own position, and
+        the RGB-D layer snaps it down to the floor in front of it. A waypoint
+        or STOP the model produced itself is left alone.
+        """
+        if selected.stop or (
+            selected.action_mode != "PREVIEW" and not selected.is_turn
+        ):
+            return selected
+        landmark = self.last_landmark
+        if (
+            current is None
+            or landmark is None
+            or self._landmark_subgoal_id != current.subgoal_id
+            or not landmark.visible
+            or landmark.u is None
+            or landmark.v is None
+            or landmark.confidence < LANDMARK_STEER_MIN_CONFIDENCE
+        ):
+            return selected
+        intent: NavigationIntent = (
+            self._navigation_phase
+            if self._navigation_phase != "STOP"
+            else "APPROACH_LANDMARK"
+        )
+        asked = "PREVIEW" if selected.action_mode == "PREVIEW" else "TURN"
+        evidence = (
+            "steered to the floor beneath the Captioner-localized landmark "
+            f"at ({landmark.u},{landmark.v}) instead of the model's {asked}: "
+            f"{landmark.evidence}"
+        )
+        override = _WaypointOutput(
+            stop=False,
+            intent=intent,
+            action_mode="EXECUTION",
+            u=landmark.u,
+            v=landmark.v,
+            confidence=landmark.confidence,
+            evidence=evidence,
+        )
+        self.last_waypoint_guard_reason = (
+            f"overrode model {asked}: landmark is localized in the current "
+            "image"
+        )
+        self.last_waypoint_applied_intent = intent
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_evidence = evidence
+        self.last_waypoint_confidence = landmark.confidence
+        self.last_requested_turn_deg = None
+        self.last_requested_normalized = (landmark.u, landmark.v)
+        self.last_requested_pixel = (
+            self._scale_normalized(landmark.u, width),
+            self._scale_normalized(landmark.v, height),
+        )
+        self._force_forward_this_step = False
+        self._force_left_turn_this_step = False
+        return override
+
     @staticmethod
     def _doorway_subgoal(subgoal: Optional[Subgoal]) -> bool:
         if subgoal is None:
@@ -762,6 +845,16 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 flags=re.IGNORECASE,
             )
         ):
+            return
+        # A point the actor could not place on the floor is a wall, a far
+        # window, or a clamped depth reading. Locking it would make the agent
+        # chase a target it can never reach and would also hold the doorway
+        # completion guard shut, so it steers this step only.
+        if self.actor.camera_height_m is not None and not point.on_floor:
+            self.last_waypoint_guard_reason = (
+                (self.last_waypoint_guard_reason or "")
+                + "; doorway waypoint not locked: point is off the floor"
+            ).lstrip("; ")
             return
         # Do not replace a still-active structural target with a fresh VLM
         # projection. Near a doorway, small view changes can move the chosen

@@ -31,16 +31,24 @@ given in order, each labelled with its view_index and its heading offset in
 degrees from the agent's current facing: negative is to the left, positive is
 to the right, and 0 is straight ahead.
 
-Choose the single view that best advances the active navigation subgoal, then
-choose one reachable FLOOR pixel in that view. Report pixel coordinates on a
-normalized 0..1000 grid: u=0 is the left edge, u=1000 the right edge, v=0 the
-top, and v=1000 the bottom. For a doorway, put the point on visible walkable
-floor just inside its structural threshold; do not default to image centre
-when the opening is off-centre. Prefer floor that visibly leads through the
-required opening over open floor that merely stays in the current room.
+Work in two steps. First choose the single view that best advances the active
+navigation subgoal: for a doorway subgoal that is the view in which the
+structural doorway (two jambs, lintel, threshold) is most fully visible,
+whether or not it is centred. Second, locate the target inside that view and
+report one reachable FLOOR pixel on a normalized 0..1000 grid: u=0 is the left
+edge, u=1000 the right edge, v=0 the top, and v=1000 the bottom.
+
+The pixel must be tied to what you see, not to the image centre. For a
+doorway: u is the midpoint between its two jambs, which is often well left or
+right of 500; v is on the floor just inside the threshold, which lies below
+the horizon, typically between 600 and 850. If the doorway sits at the edge
+of the chosen view, report its real u even when it is near 0 or 1000. For any
+other target, put the pixel on visible open floor that leads directly toward
+it. Never report a wall, furniture, a window, a tiled panel, or the far room
+seen through the opening as the pixel.
 
 Reply only with one exact JSON object:
-{"view_index":integer,"u":integer,"v":integer,"confidence":0.0,"evidence":"brief visual reason"}"""
+{"view_index":integer,"u":integer,"v":integer,"confidence":0.0,"evidence":"brief visual reason naming where the doorway sits in the chosen view"}"""
 
 
 class PreviewSelectionOutput(BaseModel):

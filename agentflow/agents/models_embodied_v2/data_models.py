@@ -413,6 +413,9 @@ class DualWindowCaptionResult:
 class TemporalCaptionerConfig:
     max_tokens: int = 48
     max_image_edge: int = 224
+    # Preview views are judged one at a time for a doorway's position, which
+    # needs more pixels than the bounded multi-frame temporal history.
+    preview_max_image_edge: int = 448
     temperature: float = 0.0
     enable_error_detection: bool = False
     min_error_detection_frames: int = 4
@@ -422,6 +425,8 @@ class TemporalCaptionerConfig:
             raise ValueError("max_tokens must be at least 8")
         if self.max_image_edge < 32:
             raise ValueError("max_image_edge must be at least 32")
+        if self.preview_max_image_edge < 32:
+            raise ValueError("preview_max_image_edge must be at least 32")
         if not isinstance(self.enable_error_detection, bool):
             raise TypeError("enable_error_detection must be a boolean")
         if not 4 <= self.min_error_detection_frames <= 8:
@@ -515,6 +520,10 @@ class NavigationPoint:
     depth_m: float
     camera_xyz: tuple[float, float, float]
     world_xyz: tuple[float, float, float]
+    # True only when the actor verified the point against the floor plane;
+    # False both for a fallback off the floor and when no camera height was
+    # available to check.
+    on_floor: bool = False
 
 
 @dataclass(frozen=True, slots=True)

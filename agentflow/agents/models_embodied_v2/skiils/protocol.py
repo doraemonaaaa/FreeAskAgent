@@ -49,11 +49,35 @@ TURN_EVIDENCE_DEG = 5.0
 # Bound the unified temporal scene request. A larger window increases visual
 # token allocation on every step after the window fills.
 MAX_COMPLETION_EVIDENCE_FRAMES = 16
+# A doorway completion is normally released by geometry (the camera reached
+# the localized doorway) or by the model having reported the approach. When
+# neither happens -- the doorway point was mislocalized, or the model jumped
+# straight from NOT_VISIBLE to CROSSED -- this many consecutive confident
+# CROSSED/AFTER_DOOR judgements, after at least this much measured walking,
+# are accepted instead of holding the subgoal shut for the whole episode.
+DOORWAY_CROSSED_STREAK_ACCEPT = 4
+DOORWAY_CROSSED_MIN_PATH_M = 1.0
+DOORWAY_CROSSED_MIN_CONFIDENCE = 0.90
+# Geometry outranks the model. Once the camera has come within
+# DOORWAY_REACHED_M of the localized doorway point that fact is latched for
+# the subgoal, so a crossing reported a few steps later is still accepted.
+# While the point is farther than DOORWAY_STILL_AHEAD_M and was never
+# reached, a CROSSED claim is contradicted by measurement and rejected no
+# matter how confident or repeated it is.
+DOORWAY_REACHED_M = 0.50
+DOORWAY_STILL_AHEAD_M = 1.00
 # Bound every online visual request. Temporal-memory requests are also resized
 # by TemporalCaptioner before reaching the engine.
 VLM_IMAGE_MIN_PIXELS = 64**2
-VLM_IMAGE_MAX_PIXELS = 224**2
-TEMPORAL_MAX_IMAGE_EDGE = 160
+# 224 px left a 640x480 frame as ~35 visual tokens, too few to place a
+# doorway; 448 px is ~140 tokens, still cheap now that inference is bf16.
+VLM_IMAGE_MAX_PIXELS = 448**2
+# 16 frames x 320 px is ~1200 visual tokens per scene call. At 160 px the
+# landmark position the Captioner reports was unusable.
+TEMPORAL_MAX_IMAGE_EDGE = 320
+# Below this Captioner confidence a localized landmark is not trusted to
+# override the waypoint model's own TURN/PREVIEW request.
+LANDMARK_STEER_MIN_CONFIDENCE = 0.60
 # The actor schema is now a nested discriminated union, which costs roughly
 # twenty-five more tokens per reply than the flat waypoint shape.  At the
 # previous 64-token budget a typical reply would truncate before its closing

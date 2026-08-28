@@ -169,8 +169,12 @@ def create_llm_engine(model_string: str, use_cache: bool = False, is_multimodal:
             "model_path": model_path,
             "use_cache": use_cache,
             "is_multimodal": is_multimodal,
-            "torch_dtype": kwargs.get("torch_dtype", "auto"),
-            "device_map": kwargs.get("device_map", "auto"),
+            # Left as None so LocalQwen3VL applies its own defaults (bf16, and
+            # a single GPU that fits) instead of transformers' "auto", which
+            # honours the checkpoint's fp32 config and shards across busy GPUs.
+            "torch_dtype": kwargs.get("torch_dtype"),
+            "device_map": kwargs.get("device_map"),
+            "attn_implementation": kwargs.get("attn_implementation", "sdpa"),
             "trust_remote_code": kwargs.get("trust_remote_code", False),
             "debug_performance": kwargs.get("debug_performance", False),
             "generation_use_cache": kwargs.get("generation_use_cache", True),

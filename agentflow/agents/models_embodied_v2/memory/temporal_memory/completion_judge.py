@@ -24,6 +24,11 @@ from agentflow.agents.models_embodied_v2.skiils.preview import (
     UnimplementedPreviewSelector,
 )
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
+    DOORWAY_CROSSED_MIN_CONFIDENCE,
+    DOORWAY_CROSSED_MIN_PATH_M,
+    DOORWAY_CROSSED_STREAK_ACCEPT,
+    DOORWAY_REACHED_M,
+    DOORWAY_STILL_AHEAD_M,
     MAX_COMPLETION_EVIDENCE_FRAMES,
     LandmarkOutput as _LandmarkOutput,
 )
@@ -60,6 +65,8 @@ class CompletionMemoryMixin:
         self._last_completion_guard: Optional[str] = None
         self._doorway_approach_seen = False
         self._doorway_target_distance_m: Optional[float] = None
+        self._doorway_crossed_streak = 0
+        self._doorway_reached = False
         self._final_target_at_streak = 0
         if preview_selector is not None:
             self.preview_selector: PreviewSelector = preview_selector
@@ -106,6 +113,9 @@ class CompletionMemoryMixin:
             self._doorway_approach_seen = False
         if hasattr(self, "_doorway_target_distance_m"):
             self._doorway_target_distance_m = None
+        if hasattr(self, "_doorway_crossed_streak"):
+            self._doorway_crossed_streak = 0
+            self._doorway_reached = False
         if hasattr(self, "_final_target_at_streak"):
             self._final_target_at_streak = 0
         if hasattr(self, "_pending_translation_m"):
@@ -123,6 +133,8 @@ class CompletionMemoryMixin:
             self._latest_scene = None
             self._doorway_approach_seen = False
             self._doorway_target_distance_m = None
+            self._doorway_crossed_streak = 0
+            self._doorway_reached = False
             self._final_target_at_streak = 0
             self._pending_translation_m = 0.0
             self._pending_yaw_delta_deg = 0.0
@@ -347,20 +359,70 @@ class CompletionMemoryMixin:
         completed = bool(
             scene.completed and scene.completion_confidence >= 0.60
         )
+        doorway_distance = self._doorway_target_distance_m
+        if doorway_distance is not None and doorway_distance <= DOORWAY_REACHED_M:
+            self._doorway_reached = True
         reached_model_doorway = bool(
-            self._doorway_target_distance_m is not None
-            and self._doorway_target_distance_m <= 0.35
+            self._doorway_reached
+            or (doorway_distance is not None and doorway_distance <= 0.35)
         )
-        if (
+        doorway_still_ahead = bool(
+            doorway_distance is not None
+            and doorway_distance > DOORWAY_STILL_AHEAD_M
+            and not self._doorway_reached
+        )
+        crossed_now = bool(
+            is_doorway
+            and scene.completed
+            and scene.door_state == "CROSSED"
+            and scene.door_camera_side == "AFTER_DOOR"
+            and scene.completion_confidence >= DOORWAY_CROSSED_MIN_CONFIDENCE
+        )
+        self._doorway_crossed_streak = (
+            self._doorway_crossed_streak + 1 if crossed_now else 0
+        )
+        sustained_crossing = bool(
+            self._doorway_crossed_streak >= DOORWAY_CROSSED_STREAK_ACCEPT
+            and self._subgoal_path_length_m >= DOORWAY_CROSSED_MIN_PATH_M
+        )
+        if completed and is_doorway and doorway_still_ahead:
+            # The model claims the camera is through the doorway while the
+            # doorway point it localized is still well ahead: measurement
+            # wins over any reported stage or streak.
+            completed = False
+            self._last_completion_guard = (
+                "rejected doorway completion: model-localized doorway is "
+                f"still {doorway_distance:.2f} m away and was never reached"
+            )
+        elif (
             completed
             and is_doorway
-            and not (approached_before or reached_model_doorway)
+            and not (
+                approached_before
+                or reached_model_doorway
+                or sustained_crossing
+            )
         ):
             completed = False
             self._last_completion_guard = (
                 "rejected doorway completion: camera has not reached the "
                 "model-localized structural doorway and no earlier model "
-                "observation placed it before/at the doorway"
+                "observation placed it before/at the doorway "
+                f"(crossed streak {self._doorway_crossed_streak}/"
+                f"{DOORWAY_CROSSED_STREAK_ACCEPT}, walked "
+                f"{self._subgoal_path_length_m:.2f} m)"
+            )
+        elif (
+            completed
+            and is_doorway
+            and sustained_crossing
+            and not (approached_before or reached_model_doorway)
+        ):
+            self._last_completion_guard = (
+                "accepted sustained doorway crossing: "
+                f"{self._doorway_crossed_streak} consecutive confident "
+                "CROSSED/AFTER_DOOR judgements after "
+                f"{self._subgoal_path_length_m:.2f} m of walking"
             )
         elif completed and is_final and self._final_target_at_streak < 2:
             completed = False
@@ -448,6 +510,8 @@ class CompletionMemoryMixin:
                     self._doorway_target_distance_m
                 ),
                 "final_target_at_streak": self._final_target_at_streak,
+                "doorway_crossed_streak": self._doorway_crossed_streak,
+                "doorway_reached": self._doorway_reached,
                 # How the preview seam behaved this step: whether views were
                 # held at all, and whether the selector answered for them.
                 "preview_view_count": len(self._preview_views),

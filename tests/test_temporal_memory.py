@@ -564,3 +564,168 @@ def test_final_subgoal_requires_two_stable_model_owned_at_observations():
     assert [result.completed for result in results] == [False, True]
     assert task.is_task_complete() is True
     assert len(captioner.calls) == 2
+
+
+def test_sustained_confident_crossing_is_accepted_after_walking():
+    """Four confident CROSSED judgements plus real walking release the guard.
+
+    This is the escape hatch for a mislocalized doorway point that the
+    camera can never reach, combined with a model that never reported the
+    approach stages.
+    """
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            door_state="CROSSED",
+            door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    for index in range(3):
+        memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+        assert memory.diagnostics()["doorway_crossed_streak"] == index + 1
+        assert task.get_current_subgoal().subgoal_id == "1"
+
+    memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(3))
+    result = memory.analyze()
+
+    assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+    assert "accepted sustained doorway crossing" in memory.diagnostics()[
+        "completion_guard"
+    ] or memory.diagnostics()["completion_guard"] is None
+
+
+def test_sustained_crossing_without_walking_stays_rejected():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            door_state="CROSSED",
+            door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    for index in range(6):
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+
+    assert task.get_current_subgoal().subgoal_id == "1"
+    assert "crossed streak 6/4" in memory.diagnostics()["completion_guard"]
+
+
+def test_crossed_streak_resets_on_a_contradicting_judgement():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    states = iter(
+        ["CROSSED", "CROSSED", "NOT_VISIBLE", "CROSSED", "CROSSED", "CROSSED"]
+    )
+
+    def factory(request):
+        state = next(states)
+        return _scene_result(
+            request,
+            completed=state == "CROSSED",
+            destination_dominant=True,
+            door_state=state,
+            door_camera_side="AFTER_DOOR" if state == "CROSSED" else "UNKNOWN",
+        )
+
+    memory = TemporalMemory(captioner=SceneCaptioner(factory), task_memory=task)
+    for index in range(6):
+        memory.set_motion_evidence(translation_m=0.5, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        memory.analyze()
+
+    # Streak restarted at the NOT_VISIBLE frame: 3 < 4, still held.
+    assert task.get_current_subgoal().subgoal_id == "1"
+    assert memory.diagnostics()["doorway_crossed_streak"] == 3
+
+
+def test_far_localized_doorway_blocks_crossing_claims_until_reached():
+    """A CROSSED claim while the localized doorway is still 2 m ahead is a
+    measurement contradiction; once the camera has passed within reach it is
+    latched and a later claim goes through even after walking on."""
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request,
+            completed=True,
+            destination_dominant=True,
+            door_state="CROSSED",
+            door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    for index, distance in enumerate((2.4, 2.0, 1.6, 1.2, 1.1)):
+        memory.set_doorway_target_distance(distance)
+        memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+        assert "still" in memory.diagnostics()["completion_guard"]
+    assert task.get_current_subgoal().subgoal_id == "1"
+
+    memory.set_doorway_target_distance(0.45)
+    memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(5))
+    assert memory.analyze().completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_reached_doorway_is_latched_for_later_crossing_claims():
+    task = TaskMemory(
+        "Exit the room and reach the pool.",
+        subgoals=_subgoals(),
+    )
+    states = iter(["NOT_VISIBLE", "NOT_VISIBLE", "NOT_VISIBLE", "CROSSED"])
+
+    def factory(request):
+        state = next(states)
+        return _scene_result(
+            request,
+            completed=state == "CROSSED",
+            destination_dominant=True,
+            door_state=state,
+            door_camera_side="AFTER_DOOR" if state == "CROSSED" else "UNKNOWN",
+        )
+
+    memory = TemporalMemory(captioner=SceneCaptioner(factory), task_memory=task)
+    # First observation binds the subgoal (no doorway localized yet), then the
+    # camera passes through the doorway point and walks 1.5 m beyond it
+    # before the model first reports the crossing.
+    for index, distance in enumerate((None, 0.40, 0.90)):
+        memory.set_doorway_target_distance(distance)
+        memory.set_motion_evidence(translation_m=0.5, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+    assert memory.diagnostics()["doorway_reached"] is True
+
+    memory.set_doorway_target_distance(1.50)
+    memory.set_motion_evidence(translation_m=0.5, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(3))
+    result = memory.analyze()
+
+    assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"

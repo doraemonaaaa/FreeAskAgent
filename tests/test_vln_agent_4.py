@@ -378,3 +378,142 @@ def test_unlocalized_doorway_turn_remains_a_measured_turn():
     assert agent.last_waypoint_model_intent == "TURN_LEFT"
     assert agent.last_waypoint_applied_intent == "TURN_LEFT"
     assert agent.last_waypoint_guard_reason is None
+
+
+SCENE_DOOR_VISIBLE_RIGHT = (
+    '{"landmark":{"visible":true,"direction":"RIGHT",'
+    '"proximity":"NEAR","passed":false,'
+    '"destination_dominant":false,"u":760,"v":640,'
+    '"confidence":0.97},"door_state":"APPROACHING",'
+    '"door_camera_side":"BEFORE_DOOR",'
+    '"door_transition":"APPROACHED",'
+    '"current_room_side":"ORIGINAL_SIDE","completed":false,'
+    '"completion_confidence":0.0,"error_mode":"NONE",'
+    '"error_confidence":0.0,"final_target":{"visible":false,'
+    '"proximity":"UNKNOWN","confidence":0.0},'
+    '"evidence":"doorway with jambs visible on the right"}'
+)
+
+WAYPOINT_TURN_RIGHT = (
+    '{"action_mode":"EXECUTION","execution":{"stop":false,'
+    '"intent":"TURN_RIGHT","turn_deg":30},'
+    '"confidence":0.9,"evidence":"doorway is on the right"}'
+)
+
+
+class DoorwayTurnEngine(RoutedEngine):
+    """Captioner localizes the doorway; waypoint model only wants to turn."""
+
+    def __init__(self, waypoint_response=WAYPOINT_TURN_RIGHT):
+        super().__init__()
+        self.waypoint_response = waypoint_response
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            label = "plan"
+            response = (
+                "1|Exit through the doorway into the pool room|"
+                "The camera has crossed the threshold into the pool room"
+            )
+        elif system_prompt.startswith("You are the temporal scene observer"):
+            label = "scene"
+            response = SCENE_DOOR_VISIBLE_RIGHT
+        elif system_prompt.startswith("You are an indoor navigation actor"):
+            label = "waypoint"
+            response = self.waypoint_response
+        else:
+            raise AssertionError("unexpected independent VLM call")
+        self.calls.append((label, content, kwargs))
+        return response
+
+
+def _room_depth(height=24, width=32, camera_height=1.25, wall=3.0, fy=16.0, cy=12.0):
+    depth = np.full((height, width), wall, dtype=np.float32)
+    for v in range(height):
+        if v > cy:
+            floor_range = camera_height * fy / (v - cy)
+            if floor_range < wall:
+                depth[v, :] = floor_range
+    return depth
+
+
+def test_localized_landmark_overrides_model_turn_with_floor_waypoint():
+    engine = DoorwayTurnEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "exit into the pool room and stop before pool."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    camera_to_world = np.eye(4)
+    camera_to_world[1, 3] = 1.25
+
+    decision = agent.act(
+        np.zeros((24, 32, 3), dtype=np.uint8),
+        _room_depth(),
+        instruction,
+        intrinsics,
+        camera_to_world,
+    )
+
+    assert decision.stop is False
+    assert decision.turn_deg is None
+    assert decision.point is not None
+    assert decision.point.on_floor is True
+    assert agent.last_requested_normalized == (760, 640)
+    assert agent.last_requested_turn_deg is None
+    assert "overrode model TURN" in agent.last_waypoint_guard_reason
+    # Landmark column, snapped down onto the floor in front of the doorway.
+    assert decision.point.pixel_uv[0] == round(760 * 31 / 1000)
+    assert abs(decision.point.world_xyz[1]) <= agent.actor.max_floor_offset_m
+    # A verified floor point beneath a doorway becomes the locked target.
+    assert agent._doorway_waypoint is decision.point
+
+
+def test_model_turn_is_kept_when_no_landmark_is_localized():
+    engine = FinalStopEngine(WAYPOINT_TURN_RIGHT)
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    camera_to_world = np.eye(4)
+    camera_to_world[1, 3] = 1.25
+
+    decision = agent.act(
+        np.zeros((24, 32, 3), dtype=np.uint8),
+        _room_depth(),
+        instruction,
+        intrinsics,
+        camera_to_world,
+    )
+
+    assert decision.turn_deg == 30
+    assert decision.point is None
+
+
+def test_off_floor_point_is_not_locked_as_doorway():
+    engine = DoorwayTurnEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "exit into the pool room and stop before pool."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    camera_to_world = np.eye(4)
+    camera_to_world[1, 3] = 1.25
+
+    # Nose to a wall: no pixel reaches floor level.
+    decision = agent.act(
+        np.zeros((24, 32, 3), dtype=np.uint8),
+        np.full((24, 32), 1.0, dtype=np.float32),
+        instruction,
+        intrinsics,
+        camera_to_world,
+    )
+
+    assert decision.point is not None
+    assert decision.point.on_floor is False
+    assert agent._doorway_waypoint is None
+    assert "not locked" in agent.last_waypoint_guard_reason

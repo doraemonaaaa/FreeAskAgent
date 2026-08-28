@@ -149,39 +149,56 @@ views and motion. Output only:
 {"error":false,"error_mode":"NONE","confidence":0.0,"evidence":"..."}"""
 
 
-DOOR_SCENE_SYSTEM_PROMPT = """You are the temporal scene observer specialized
-in verifying physical doorway passage from ordered first-person video frames.
-Answer one primary question: did the camera itself pass through the active
-subgoal's structural doorway? Do not infer passage from the route instruction,
-from seeing the destination through an opening, or from the door disappearing.
+DOOR_SCENE_SYSTEM_PROMPT = """You are the temporal scene observer specialized in verifying physical doorway
+passage from ordered first-person video frames. Answer one primary question:
+has the camera itself already walked through the active subgoal's structural
+doorway? Seeing the far room THROUGH the opening is exactly what BEFORE the
+doorway looks like; it is never evidence of having crossed.
 
-Use this evidence protocol before producing JSON:
-1. Treat the first frame as the ORIGINAL_SIDE visual reference. Compare its
-   walls, fixtures, and room layout with the CURRENT (last) frame.
-2. Inspect adjacent recent frames for a literal passage transition: the same
-   doorway grows toward the camera, its jambs/threshold move to and beyond the
-   image boundaries, then the far-side space fills the view while forward
-   translation occurs.
-3. If a doorway moves toward an image edge while yaw changes and then vanishes,
-   that is TURNED_AWAY, not PASSED_THROUGH. If the CURRENT frame still shows
-   original-side walls, bathtub, sink, bed, or decorations, current_room_side
-   is ORIGINAL_SIDE even when a blue room is visible through the opening.
-4. Never reconstruct a crossing in an unobserved interval. Ambiguous evidence
-   means completed=false.
+Follow this procedure, in order, before producing JSON:
+1. In the CURRENT (last) frame, look for the structural doorway: two jambs,
+   a lintel, and a threshold that the camera could walk through.
+   - If it is visible ahead of the camera, the camera is BEFORE it. Set
+     landmark.visible=true with its u/v and direction, door_camera_side=
+     BEFORE_DOOR, and door_state=APPROACHING (opening is small or off to one
+     side) or AT_THRESHOLD (the jambs reach the left and right image edges
+     and the threshold is at the bottom of the frame). completed=false.
+   - If it is not visible, continue to step 2.
+2. Decide between NOT_VISIBLE and CROSSED using the earlier frames:
+   - CROSSED requires ALL of: (a) an earlier frame in this window showed the
+     same doorway ahead of the camera; (b) the frames after it show forward
+     translation with the opening growing until its jambs leave the image
+     edges; (c) the CURRENT frame shows only surfaces of the far-side room
+     and none of the ORIGINAL_SIDE fixtures seen in the first frame (walls,
+     bathtub, sink, bed, decorations). If any of (a), (b), (c) is missing, the
+     answer is NOT_VISIBLE with door_camera_side=UNKNOWN and completed=false.
+   - If the doorway slid toward an image edge while the view rotated and then
+     vanished, the camera turned away: that is TURNED_AWAY, not PASSED_THROUGH.
+     Use door_state=NOT_VISIBLE, door_camera_side=BEFORE_DOOR, completed=false.
+3. Never reconstruct a crossing that the frames do not show, and never infer
+   one from the door disappearing from view. A window, a mirror, a tiled
+   panel, a blue wall, or a room glimpsed through an opening is not a crossed
+   doorway.
 
-Use door_state NOT_VISIBLE, APPROACHING, AT_THRESHOLD, CROSSING, or CROSSED;
-door_camera_side UNKNOWN, BEFORE_DOOR, AT_DOOR, or AFTER_DOOR;
-door_transition NONE, TURNED_AWAY, APPROACHED, or PASSED_THROUGH; and
+Field values: door_state NOT_VISIBLE, APPROACHING, AT_THRESHOLD, CROSSING, or
+CROSSED; door_camera_side UNKNOWN, BEFORE_DOOR, AT_DOOR, or AFTER_DOOR;
+door_transition NONE, TURNED_AWAY, APPROACHED, or PASSED_THROUGH;
 current_room_side ORIGINAL_SIDE, FAR_SIDE, or AMBIGUOUS. landmark refers only
-to the structural opening in the CURRENT frame. Its direction is LEFT, CENTER,
+to the structural opening in the CURRENT frame; its direction is LEFT, CENTER,
 RIGHT, or UNKNOWN. destination_dominant means the CURRENT frame is dominated
-by the far-side space, not that it is merely visible through the doorway.
+by the far-side space with the doorway behind the camera.
 
-completed=true is allowed only when all of these independent outputs agree:
-door_state=CROSSED, door_camera_side=AFTER_DOOR,
-door_transition=PASSED_THROUGH, current_room_side=FAR_SIDE, and
-landmark.destination_dominant=true. Otherwise return completed=false. Diagnose
-an execution error only when the multi-frame evidence is clear; otherwise use
+landmark is independent of door_state: whenever any part of the doorway's
+frame (a jamb, the lintel, or the threshold) is inside the CURRENT image,
+report landmark.visible=true with its u/v and direction, even if you believe
+the camera is already through it. Only when no part of the doorway frame is in
+the CURRENT image is landmark.visible=false.
+
+completed=true is allowed only when all of these agree: door_state=CROSSED,
+door_camera_side=AFTER_DOOR, door_transition=PASSED_THROUGH,
+current_room_side=FAR_SIDE, and landmark.destination_dominant=true.
+Otherwise completed=false. Diagnose an
+execution error only when the multi-frame evidence is clear; otherwise use
 NONE. This doorway subgoal is not the final target, so final_target is always
 invisible/UNKNOWN.
 
@@ -372,7 +389,9 @@ class TemporalCaptioner:
             content.extend(
                 (
                     f"view_index={index}; yaw_deg={float(yaw_deg):+.1f}",
-                    self._encode_png(image),
+                    self._encode_png(
+                        image, max_edge=self.config.preview_max_image_edge
+                    ),
                 )
             )
         kwargs = self._inference_kwargs()
@@ -1004,8 +1023,13 @@ class TemporalCaptioner:
             self._png_cache.popitem(last=False)
         return encoded
 
-    def _encode_png(self, image: Any) -> bytes:
-        """Encode an image without adding it to the temporal frame cache."""
+    def _encode_png(self, image: Any, *, max_edge: Optional[int] = None) -> bytes:
+        """Encode an image without adding it to the temporal frame cache.
+
+        ``max_edge`` defaults to the temporal budget; preview views pass their
+        own, larger budget because a single view must support locating a
+        doorway's jambs, which the small multi-frame history need not.
+        """
         try:
             import numpy as np
             from PIL import Image
@@ -1024,7 +1048,7 @@ class TemporalCaptioner:
                 array = np.clip(array, 0, 255).astype(np.uint8)
                 pil = Image.fromarray(array).convert("RGB")
             pil.thumbnail(
-                (self.config.max_image_edge,) * 2,
+                (max_edge or self.config.max_image_edge,) * 2,
                 Image.Resampling.LANCZOS,
             )
             buffer = io.BytesIO()

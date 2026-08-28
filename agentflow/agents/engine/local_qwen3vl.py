@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Thread
 from typing import List, Optional, Union
 
@@ -100,6 +101,122 @@ class VideoInput:
         )
 
 
+_DTYPE_ALIASES = {
+    "bf16": torch.bfloat16,
+    "bfloat16": torch.bfloat16,
+    "fp16": torch.float16,
+    "float16": torch.float16,
+    "half": torch.float16,
+    "fp32": torch.float32,
+    "float32": torch.float32,
+}
+
+# Room to leave on a GPU beyond the weights themselves: KV cache for a long
+# multimodal context (~150 KB/token at this model's 8 KV heads x 128 dims),
+# vision-tower activations, and the allocator's own fragmentation slack.
+_GPU_HEADROOM_BYTES = 6 * 1024 ** 3
+
+
+def _resolve_dtype(torch_dtype):
+    """Pick the compute dtype, defaulting to bf16 rather than the config's.
+
+    ``torch_dtype="auto"`` makes transformers honour ``config.dtype``, and
+    several Qwen3-VL fine-tunes ship a config that claims ``float32`` even
+    though the checkpoint on disk is bf16.  Loading those in fp32 doubles the
+    memory footprint and drops matmuls off the tensor cores (~18 TFLOPS
+    instead of ~270 on an A100), so bf16 is the default here and "auto" must
+    be asked for explicitly.
+    """
+    if torch_dtype is None:
+        torch_dtype = os.getenv("QWEN3VL_DTYPE", "bfloat16")
+    if isinstance(torch_dtype, str):
+        if torch_dtype == "auto":
+            return "auto"
+        try:
+            return _DTYPE_ALIASES[torch_dtype.lower()]
+        except KeyError:
+            raise ValueError(
+                f"Unsupported QWEN3VL_DTYPE/torch_dtype {torch_dtype!r}; "
+                f"expected one of {sorted(_DTYPE_ALIASES)} or 'auto'."
+            ) from None
+    return torch_dtype
+
+
+def _checkpoint_element_size(model_path: str) -> Optional[int]:
+    """Element size of the largest tensor dtype in the checkpoint's shards.
+
+    Read straight from the safetensors header (an 8-byte little-endian length
+    followed by that many bytes of JSON) so we do not have to trust
+    ``config.json``, which is exactly the field that lies about fp32.
+    """
+    shards = sorted(Path(model_path).glob("*.safetensors"))
+    if not shards:
+        return None
+    sizes = {"F64": 8, "I64": 8, "F32": 4, "I32": 4, "BF16": 2, "F16": 2, "I16": 2, "F8_E4M3": 1, "F8_E5M2": 1, "I8": 1, "U8": 1, "BOOL": 1}
+    try:
+        with open(shards[0], "rb") as f:
+            header_len = int.from_bytes(f.read(8), "little")
+            header = json.loads(f.read(header_len))
+    except (OSError, ValueError):
+        return None
+    found = [sizes[v["dtype"]] for v in header.values() if isinstance(v, dict) and v.get("dtype") in sizes]
+    return max(found) if found else None
+
+
+def _estimate_weight_bytes(model_path: str, dtype) -> Optional[int]:
+    """Bytes the weights will occupy once loaded as ``dtype``."""
+    if not isinstance(dtype, torch.dtype):
+        return None
+    on_disk = sum(f.stat().st_size for f in Path(model_path).glob("*.safetensors"))
+    disk_element_size = _checkpoint_element_size(model_path)
+    if not on_disk or not disk_element_size:
+        return None
+    return int(on_disk / disk_element_size * dtype.itemsize)
+
+
+def _resolve_device_map(model_path: str, dtype, device_map):
+    """Prefer a single GPU that fits the whole model over sharding it.
+
+    ``device_map="auto"`` spreads the model over every visible GPU and spills
+    to CPU when they are busy -- both are ruinous for latency: sharding turns
+    each forward pass into a serial pipeline with only one GPU live at a time,
+    and CPU offload streams weights over PCIe for every generated token.  On a
+    shared box the free memory that decision is based on also changes between
+    runs, so placement silently varies.  Pinning to whichever single GPU has
+    room keeps the model resident and the placement reproducible.
+    """
+    if device_map is None:
+        device_map = os.getenv("QWEN3VL_DEVICE_MAP", "").strip() or None
+    if device_map is not None:
+        return device_map
+    if not torch.cuda.is_available():
+        return "auto"
+
+    needed = _estimate_weight_bytes(model_path, dtype)
+    if needed is None:
+        return "auto"
+    needed += _GPU_HEADROOM_BYTES
+
+    best_index, best_free = None, 0
+    for index in range(torch.cuda.device_count()):
+        try:
+            free, _total = torch.cuda.mem_get_info(index)
+        except RuntimeError:
+            continue
+        if free > best_free:
+            best_index, best_free = index, free
+
+    if best_index is None or best_free < needed:
+        print(
+            f"[LocalQwen3VL] no single GPU has the ~{needed / 1024 ** 3:.1f} GiB needed "
+            f"(most free: {best_free / 1024 ** 3:.1f} GiB); falling back to device_map='auto', "
+            "which may shard across GPUs or offload to CPU and will be slow. "
+            "Set QWEN3VL_DEVICE_MAP=cuda:<i> to override."
+        )
+        return "auto"
+    return {"": f"cuda:{best_index}"}
+
+
 class LocalQwen3VL(EngineLM, CachedEngine):
     DEFAULT_SYSTEM_PROMPT = "You are a helpful, creative, and smart assistant."
     DEFAULT_MODEL_PATH = "models/Qwen3-VL-8B-Instruct"
@@ -112,8 +229,9 @@ class LocalQwen3VL(EngineLM, CachedEngine):
         system_prompt=DEFAULT_SYSTEM_PROMPT,
         is_multimodal: bool = False,
         use_cache: bool = True,
-        torch_dtype="auto",
-        device_map="auto",
+        torch_dtype=None,
+        device_map=None,
+        attn_implementation=None,
         trust_remote_code=False,
         debug_performance: bool = False,
         generation_use_cache: bool = True,
@@ -146,12 +264,29 @@ class LocalQwen3VL(EngineLM, CachedEngine):
             cache_path = os.path.join(root, f"cache_local_qwen3vl_{cache_name}.db")
             super().__init__(cache_path=cache_path)
 
-        self.model = AutoModelForImageTextToText.from_pretrained(
-            self.model_path,
-            torch_dtype=torch_dtype,
-            device_map=device_map,
-            trust_remote_code=trust_remote_code,
+        resolved_dtype = _resolve_dtype(torch_dtype)
+        resolved_device_map = _resolve_device_map(
+            self.model_path, resolved_dtype, device_map
         )
+        load_kwargs = {
+            "device_map": resolved_device_map,
+            "trust_remote_code": trust_remote_code,
+        }
+        if attn_implementation is not None:
+            load_kwargs["attn_implementation"] = attn_implementation
+        print(
+            f"[LocalQwen3VL] loading {self.model_path} dtype={resolved_dtype} "
+            f"device_map={resolved_device_map}"
+        )
+        try:
+            # transformers >= 5 renamed ``torch_dtype`` to ``dtype``.
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_path, dtype=resolved_dtype, **load_kwargs
+            )
+        except TypeError:
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                self.model_path, torch_dtype=resolved_dtype, **load_kwargs
+            )
         self.processor = AutoProcessor.from_pretrained(
             self.model_path,
             trust_remote_code=trust_remote_code,
