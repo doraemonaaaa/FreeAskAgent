@@ -371,3 +371,84 @@ def test_preview_selector_compares_views_without_evicting_temporal_cache():
 def test_complete_json_object_is_recovered_from_wrapping_text(response):
     result = TemporalCaptioner(engine=FakeEngine(response)).analyze(_request())
     assert result.completed is False
+
+
+TRUNCATED_PRETTY_SCENE = """{
+  "door_state": "NOT_APPLICABLE",
+  "door_camera_side": "NOT_APPLICABLE",
+  "door_transition": "NOT_APPLICABLE",
+  "current_room_side": "NOT_APPLICABLE",
+  "landmark": {
+    "visible": true,
+    "direction": "RIGHT",
+    "proximity": "NEAR",
+    "passed": false,
+    "destination_dominant": false,
+    "u": 720,
+    "v": 640,
+    "confidence": 0.8
+  },
+  "completed": false,
+  "completion_confidence": 0.7,
+  "error_mode": "NONE",
+  "error_confidence": 0.6,
+  "final_target": {
+    "visible": false,
+    "proximity": "UNKNOWN",
+    "confidence": 0.5
+  },
+  "evidence": "The pool edge is visible to the right of the camera and the walk"""
+
+
+def test_scene_analysis_repairs_a_pretty_printed_reply_cut_by_the_token_budget():
+    """Qwen3-VL-8B sometimes indents the object, which doubles its length
+    and lets the token budget cut it inside the trailing evidence string."""
+    captioner = TemporalCaptioner(engine=FakeEngine(TRUNCATED_PRETTY_SCENE))
+
+    result = captioner.analyze_scene(_scene_request())
+
+    assert result.completed is False
+    assert result.landmark.visible is True
+    assert (result.landmark.u, result.landmark.v) == (720, 640)
+    assert result.landmark.proximity == "NEAR"
+    assert result.completion_evidence.startswith("The pool edge is visible")
+    assert captioner.last_failed_raw_response is None
+
+
+def test_scene_analysis_repair_backs_up_to_the_last_complete_field():
+    cut_inside_number = TRUNCATED_PRETTY_SCENE.split('"completion_confidence"')[0]
+    cut_inside_number += '"completion_confidence": 0.'
+    captioner = TemporalCaptioner(engine=FakeEngine(cut_inside_number))
+    with pytest.raises(TemporalOutputError, match="invalid JSON"):
+        # The fields before the cut are recovered, but required keys are
+        # missing: that is reported as the truncation it is, so retry logic
+        # and step logs keep telling it apart from a wrong schema.
+        captioner.analyze_scene(_scene_request())
+    assert captioner.last_failed_raw_response is not None
+
+
+def test_scene_schema_mismatch_is_an_output_error_with_the_raw_text_kept():
+    wrong_schema = '{"completed": false, "evidence": "only two keys"}'
+    captioner = TemporalCaptioner(engine=FakeEngine(wrong_schema))
+
+    with pytest.raises(TemporalOutputError, match="wrong schema"):
+        captioner.analyze_scene(_scene_request())
+
+    assert captioner.last_failed_raw_response is not None
+    assert "only two keys" in captioner.last_failed_raw_response
+
+
+def test_scene_prompts_describe_value_types_instead_of_placeholder_values():
+    from agentflow.agents.models_embodied_v2.memory.temporal_memory.temporal_captioner import (
+        DOOR_SCENE_SYSTEM_PROMPT,
+        SCENE_SYSTEM_PROMPT,
+    )
+    from agentflow.agents.models_embodied_v2.skiils.protocol import POINT_PROMPT
+
+    for prompt in (SCENE_SYSTEM_PROMPT, DOOR_SCENE_SYSTEM_PROMPT, POINT_PROMPT):
+        # A literal 0.0 or 500/750 in the schema line was copied verbatim by
+        # Qwen3-VL-8B on every step of a full run.
+        assert '"confidence":0.0' not in prompt
+        assert '"u":500' not in prompt and '"v":750' not in prompt
+        assert "<float 0-1>" in prompt
+        assert "single-line" in prompt

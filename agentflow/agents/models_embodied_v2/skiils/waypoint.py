@@ -11,11 +11,13 @@ from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
     TemporalMemory,
 )
 from .protocol import (
+    COMMITTED_TARGET_REACHED_M,
     CORRIDOR_WAYPOINT_DEVIATION,
     ERROR_CONFIDENCE_THRESHOLD,
     ERROR_CONFIRMATION_VOTES,
     FINAL_STOP_EVIDENCE_VOTES,
-    FINAL_STOP_MIN_CONFIDENCE,
+    FINAL_STOP_MAX_TARGET_RANGE_M,
+    LANDMARK_STEER_MIN_CONFIDENCE,
     MAX_TURN_DEG,
     POINT_PROMPT,
     RECOVERY_FORWARD_U,
@@ -58,7 +60,6 @@ class WaypointPolicyMixin:
             or not self.subgoals
             or current.subgoal_id != self.subgoals[-1].subgoal_id
             or self._navigation_phase != "FINAL_APPROACH"
-            or waypoint.confidence < FINAL_STOP_MIN_CONFIDENCE
         ):
             return False
 
@@ -87,7 +88,10 @@ class WaypointPolicyMixin:
                 r"\b(?:directly beside|next to|at immediate (?:foreground|"
                 r"stopping distance)|in the immediate foreground|"
                 r"positioned beside|reached the immediate foreground|"
-                r"has reached|have reached|destination reached|target reached)\b",
+                r"has reached|have reached|destination reached|target reached|"
+                r"(?:is|are|was|now|has been|have been) reached|"
+                r"stationary (?:at|in)|"
+                r"at the threshold)\b",
                 evidence,
             )
             or (
@@ -104,6 +108,83 @@ class WaypointPolicyMixin:
             )
         )
         return names_target and near_field and not contradicted
+
+    def _located_landmark_for(self, current: Any) -> Any:
+        """The Captioner's landmark for ``current`` when it has a pixel."""
+        landmark = self.last_landmark
+        if (
+            current is not None
+            and landmark is not None
+            and self._landmark_subgoal_id == current.subgoal_id
+            and landmark.visible
+            and landmark.u is not None
+            and landmark.v is not None
+            and landmark.confidence >= LANDMARK_STEER_MIN_CONFIDENCE
+        ):
+            return landmark
+        return None
+
+    def _committed_target_ahead_m(self) -> Optional[float]:
+        """Distance to this stage's committed point while it is unreached."""
+        memory = self.temporal_memory
+        distance = getattr(memory, "_doorway_target_distance_m", None)
+        if distance is None or getattr(memory, "_doorway_reached", False):
+            return None
+        tolerance = getattr(
+            memory, "_doorway_reach_tolerance_m", COMMITTED_TARGET_REACHED_M
+        )
+        return float(distance) if float(distance) > tolerance else None
+
+    def _final_stop_is_range_grounded(
+        self,
+        depth_m: Optional[np.ndarray],
+        current: Any,
+        *,
+        width: int,
+        height: int,
+    ) -> tuple[bool, str]:
+        """Measure whether the claimed final target is actually close.
+
+        The text check above cannot tell "at the closet doorway" from "the
+        closet doorway is in view": this checkpoint says the former the
+        moment the latter is true, still 3 m out. Read the depth frame at the
+        Captioner-located landmark, or across the forward band when the
+        landmark has no pixel, and require it within
+        ``FINAL_STOP_MAX_TARGET_RANGE_M``.
+        """
+        if depth_m is None or depth_m.shape != (height, width):
+            return True, "no depth frame to range the target"
+        landmark = self._located_landmark_for(current)
+        if landmark is not None:
+            centre_u = self._scale_normalized(landmark.u, width)
+            centre_v = self._scale_normalized(landmark.v, height)
+            half = max(int(width * 0.06), 1)
+            top, bottom = max(centre_v - half, 0), min(centre_v + half + 1, height)
+            left, right = max(centre_u - half, 0), min(centre_u + half + 1, width)
+            where = "landmark pixel"
+        else:
+            top, bottom = int(height * 0.45), int(height * 0.80)
+            left, right = int(width * 0.35), int(width * 0.65)
+            where = "forward band"
+        patch = depth_m[top:bottom, left:right]
+        valid = patch[
+            np.isfinite(patch)
+            & (patch >= self.actor.min_depth_m)
+            & (patch <= self.actor.max_depth_m)
+        ]
+        if valid.size == 0:
+            return True, f"no valid depth at the {where}"
+        # The upper quantile: furniture between the camera and the target
+        # fills the near end of the patch, and the question is whether the
+        # target itself is close, not whether something in front of it is.
+        range_m = float(np.quantile(valid, 0.65))
+        if range_m <= FINAL_STOP_MAX_TARGET_RANGE_M:
+            return True, f"{where} measures {range_m:.2f}m"
+        return (
+            False,
+            f"{where} measures {range_m:.2f}m, beyond "
+            f"{FINAL_STOP_MAX_TARGET_RANGE_M:.1f}m",
+        )
 
     def _recovery_mode_for_step(self) -> Optional[str]:
         caption = self.last_caption
@@ -224,6 +305,17 @@ class WaypointPolicyMixin:
         self._recovery_attempt_steps = 0
         self._recovery_anchor_position_xz = None
         self._error_candidates.clear()
+
+    def _landmark_located_for_current_subgoal(self, current) -> bool:
+        landmark = getattr(self, "last_landmark", None)
+        return bool(
+            current is not None
+            and landmark is not None
+            and getattr(self, "_landmark_subgoal_id", None) == current.subgoal_id
+            and landmark.visible
+            and landmark.u is not None
+            and landmark.confidence >= LANDMARK_STEER_MIN_CONFIDENCE
+        )
 
     def _depth_guided_recovery_waypoint(
         self,
@@ -430,7 +522,17 @@ class WaypointPolicyMixin:
                 subgoal_context
                 or f"Navigation instruction: {instruction}",
                 f"Full route instruction: {instruction}",
-                f"Required navigation phase: {self._navigation_phase}.",
+                (
+                    f"Required navigation phase: {self._navigation_phase}."
+                    if not (
+                        self._navigation_phase in ("TURN_LEFT", "TURN_RIGHT")
+                        and self._landmark_located_for_current_subgoal(current)
+                    )
+                    else "Required navigation phase: APPROACH_LANDMARK (the "
+                    "requested turn is satisfied: the stage's landmark is "
+                    "already visible; do not turn further, steer to the "
+                    "floor beneath it)."
+                ),
                 (
                     "Corridor heading lock: active; preserve the established "
                     "forward direction."
@@ -570,18 +672,47 @@ class WaypointPolicyMixin:
             and landmark is not None
             and self._landmark_subgoal_id == current.subgoal_id
             and landmark.visible
-            and landmark.confidence >= 0.60
+            and landmark.confidence >= LANDMARK_STEER_MIN_CONFIDENCE
             and self._navigation_phase
             in {"APPROACH_LANDMARK", "FINAL_APPROACH"}
             and (
                 waypoint.action_mode == "PREVIEW"
                 or waypoint.is_turn
-                or waypoint.stop
+                # A STOP on the final stage is the arrival claim the vote
+                # below verifies; steering toward the still-visible target
+                # instead would leave "stop in the doorway" with no way to
+                # ever stop while the doorway is in view. Earlier stages
+                # keep the override: their STOP is premature by definition.
+                or (
+                    waypoint.stop
+                    and not (
+                        self.subgoals
+                        and current.subgoal_id
+                        == self.subgoals[-1].subgoal_id
+                    )
+                )
                 or waypoint.confidence < 0.10
             )
         )
         if landmark_guides_motion:
-            if landmark.direction in {"LEFT", "RIGHT"}:
+            if landmark.u is not None and landmark.v is not None:
+                # The landmark has a pixel: walk to the floor beneath it. The
+                # follower turns as much as the world point requires, so an
+                # explicit turn primitive would only add a spin-and-step
+                # alternation on top of it.
+                applied_intent = self._navigation_phase
+                waypoint = waypoint.model_copy(
+                    update={
+                        "stop": False,
+                        "intent": applied_intent,
+                        "action_mode": "EXECUTION",
+                        "turn_deg": None,
+                        "u": landmark.u,
+                        "v": landmark.v,
+                    }
+                )
+                guard_action = "a floor waypoint beneath the located landmark"
+            elif landmark.direction in {"LEFT", "RIGHT"}:
                 turn_right = landmark.direction == "RIGHT"
                 applied_intent = (
                     "TURN_RIGHT" if turn_right else "TURN_LEFT"
@@ -748,6 +879,41 @@ class WaypointPolicyMixin:
                 waypoint,
                 current,
             )
+            range_reason = ""
+            located_target = self._located_landmark_for(current)
+            if supported_stop and on_final_subgoal:
+                # Odometry against the committed target outranks anything
+                # the frame text says: while the point this stage walks to
+                # is still ahead, the camera is not there yet.
+                ahead_m = self._committed_target_ahead_m()
+                if ahead_m is not None:
+                    supported_stop = False
+                    range_reason = (
+                        f"committed target still {ahead_m:.2f}m ahead"
+                    )
+                elif (
+                    located_target is not None
+                    and self._final_commit_subgoal_id != current.subgoal_id
+                ):
+                    # First sight of the located target: commit to the floor
+                    # beneath it (the deferral below steers there and the
+                    # caller locks it) before any arrival claim can count.
+                    # One attempt per stage, so a point that cannot be
+                    # locked does not block the vote forever.
+                    self._final_commit_subgoal_id = current.subgoal_id
+                    supported_stop = False
+                    range_reason = (
+                        "committing to the located target before voting"
+                    )
+            if supported_stop:
+                supported_stop, range_reason = (
+                    self._final_stop_is_range_grounded(
+                        depth_m,
+                        current,
+                        width=width,
+                        height=height,
+                    )
+                )
             self._final_stop_evidence.append(supported_stop)
             if (
                 supported_stop
@@ -771,20 +937,34 @@ class WaypointPolicyMixin:
             self.last_waypoint_guard_reason = (
                 "model STOP deferred until task completion or repeated "
                 "motion-grounded near-target evidence"
+                + (f" ({range_reason})" if range_reason else "")
             )
             self.last_waypoint_applied_intent = (
                 "FINAL_APPROACH"
                 if on_final_subgoal
                 else self._navigation_phase
             )
+            # A deferred final STOP still has to go somewhere. When the
+            # Captioner has the target located in this frame, walk to the
+            # floor beneath it: that point is lockable and measurable, so
+            # completion can be held until the camera actually gets there.
+            # Straight ahead is only the fallback when nothing is located.
+            deferred_landmark = (
+                located_target if on_final_subgoal else None
+            )
+            steer_to_landmark = deferred_landmark is not None
             waypoint = waypoint.model_copy(
                 update={
                     "stop": False,
                     "intent": self.last_waypoint_applied_intent,
-                    "u": 500,
-                    "v": 750,
+                    "u": deferred_landmark.u if steer_to_landmark else 500,
+                    "v": deferred_landmark.v if steer_to_landmark else 750,
                 }
             )
+            if steer_to_landmark:
+                self.last_waypoint_guard_reason += (
+                    "; steering to the floor beneath the located target"
+                )
             self.last_model_response = (
                 f"{self.last_model_response} [STOP deferred]"
             )

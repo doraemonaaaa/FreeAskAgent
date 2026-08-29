@@ -5,6 +5,10 @@ from dataclasses import dataclass
 
 import pytest
 
+from agentflow.agents.models_embodied_v2.skiils.protocol import (
+    MAX_COMPLETION_EVIDENCE_FRAMES,
+)
+
 from agentflow.agents.models_embodied_v2 import (
     CaptionResult,
     Subgoal,
@@ -418,12 +422,12 @@ def test_unified_scene_call_is_once_per_step_and_history_stays_bounded():
         memory.analyze()
 
     assert len(captioner.calls) == 20
-    assert len(memory.recent_frames()) == 16
+    assert len(memory.recent_frames()) == MAX_COMPLETION_EVIDENCE_FRAMES
     assert [frame.frame_id for frame in memory.recent_frames()] == list(
-        range(5, 21)
+        range(21 - MAX_COMPLETION_EVIDENCE_FRAMES, 21)
     )
     assert [frame.frame_id for frame in captioner.calls[-1].frames] == list(
-        range(5, 21)
+        range(21 - MAX_COMPLETION_EVIDENCE_FRAMES, 21)
     )
     assert memory.recent_frames()[-1].subgoal_path_length_m == pytest.approx(5.0)
 
@@ -728,4 +732,374 @@ def test_reached_doorway_is_latched_for_later_crossing_claims():
     result = memory.analyze()
 
     assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_turn_subgoal_completion_waits_for_measured_rotation():
+    task = TaskMemory(
+        "Turn left and go through the hallway.",
+        subgoals=(
+            Subgoal("1", "Turn left", "After turning left, the hallway is centred in the view."),
+            Subgoal("2", "Proceed through the hallway", "The camera is moving through the hallway."),
+        ),
+    )
+    verdicts = iter([False, True, True])
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request, completed=next(verdicts), destination_dominant=True
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()  # binds subgoal 1
+
+    # The fake landmark is centred, so only a rotation below one primitive
+    # (15 deg) is still an unfinished turn.
+    memory.set_turn_progress(10.0)
+    memory.append_observation(_frame(1))
+    assert memory.analyze().completed is False
+    assert "measured left turn is 10 deg" in memory.diagnostics()["completion_guard"]
+
+    memory.set_turn_progress(75.0)
+    memory.append_observation(_frame(2))
+    assert memory.analyze().completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_non_doorway_completion_is_deferred_while_committed_target_is_ahead():
+    task = TaskMemory(
+        "Go beside the bed and stop.",
+        subgoals=(
+            Subgoal("1", "Go beside the bed", "The bed is beside the camera."),
+            Subgoal("2", "Stop", "The camera has stopped."),
+        ),
+    )
+    verdicts = iter([False, True, True])
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request, completed=next(verdicts), destination_dominant=True
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()  # binds the subgoal; no target yet
+
+    memory.set_committed_target_distance(0.82)
+    memory.append_observation(_frame(1))
+    assert memory.analyze().completed is False
+    assert "committed waypoint is still 0.82 m ahead" in memory.diagnostics()["completion_guard"]
+    assert task.get_current_subgoal().subgoal_id == "1"
+
+    memory.set_committed_target_distance(0.30)
+    memory.append_observation(_frame(2))
+    assert memory.analyze().completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_turn_subgoal_completes_on_measured_rotation_without_model_consent():
+    task = TaskMemory(
+        "Turn left and go through the hallway.",
+        subgoals=(
+            Subgoal("1", "Turn left", "After turning left, the hallway is centred in the view."),
+            Subgoal("2", "Proceed through the hallway", "The camera is moving through the hallway."),
+        ),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(request, completed=False))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()
+
+    memory.set_turn_progress(65.0)
+    memory.append_observation(_frame(1))
+    result = memory.analyze()
+
+    assert result.completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_stairs_subgoal_completes_on_measured_rise_that_levels_off():
+    task = TaskMemory(
+        "Go up the stairs and enter the bedroom.",
+        subgoals=(
+            Subgoal("1", "Go up the stairs", "The stairs are below and behind the camera."),
+            Subgoal("2", "Enter the bedroom", "The camera has crossed the bedroom threshold."),
+        ),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(request, completed=False))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()
+
+    # Climbing: height rising, not levelled yet.
+    for index, rise in enumerate((0.15, 0.30, 0.42), start=1):
+        memory.set_elevation_progress(rise)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+    # Levelled off at +0.42 m for three observations.
+    for index, rise in enumerate((0.42, 0.43), start=4):
+        memory.set_elevation_progress(rise)
+        memory.append_observation(_frame(index))
+        result = memory.analyze()
+    assert result.completed is True
+    assert "accepted measured stairs up" in memory.diagnostics()["completion_guard"] or task.get_current_subgoal().subgoal_id == "2"
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def test_landmark_stage_completes_on_arrival_at_committed_point():
+    task = TaskMemory(
+        "Go beside the bed and turn left.",
+        subgoals=(
+            Subgoal("1", "Go beside the bed", "The bed is beside the camera."),
+            Subgoal("2", "Turn left", "After turning left, the hallway is centred."),
+        ),
+    )
+    captioner = SceneCaptioner(lambda request: _scene_result(request, completed=False))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()
+
+    # Localized from 3.2 m away: tolerance 0.8 m.
+    for index, distance in enumerate((3.2, 2.4, 1.6, 1.0), start=1):
+        memory.set_committed_target_distance(distance, reach_tolerance_m=0.8)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+    memory.set_committed_target_distance(0.7, reach_tolerance_m=0.8)
+    memory.append_observation(_frame(5))
+    assert memory.analyze().completed is True
+    assert task.get_current_subgoal().subgoal_id == "2"
+
+
+def _route_subgoals():
+    return tuple(
+        Subgoal(str(i), d, c)
+        for i, (d, c) in enumerate(
+            (
+                ("Turn left", "After turning left, the stairs are centred."),
+                ("Go up the stairs", "The stairs are behind the camera."),
+                ("Enter the bedroom", "The camera has crossed the bedroom threshold."),
+                ("Go beside the bed", "The bed is beside the camera."),
+                ("Go through the hallway", "The camera has passed the hallway."),
+                ("Go just inside the bathroom doorway", "The camera is just inside the bathroom doorway."),
+            ),
+            start=1,
+        )
+    )
+
+
+def _walk(memory, frames, *, at, step_m=0.4, start=0):
+    """Feed frames with the destination reported AT (or not)."""
+    for index in range(start, start + frames):
+        memory.set_motion_evidence(translation_m=step_m, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        memory.analyze()
+
+
+def _at_captioner(at_from_frame):
+    def factory(request):
+        frame_id = request.frames[-1].frame_id
+        return _scene_result(
+            request,
+            completed=False,
+            final_visible=frame_id >= at_from_frame,
+            proximity="AT",
+        )
+    return SceneCaptioner(factory)
+
+
+def test_stuck_stage_is_skipped_when_destination_is_verified_at():
+    task = TaskMemory("Route to the bathroom.", subgoals=_route_subgoals())
+    # Frame ids are assigned by the memory, 1-based and consecutive.
+    memory = TemporalMemory(captioner=_at_captioner(at_from_frame=26), task_memory=task)
+    # Stuck on stage 4 with 3 stages remaining: not near the end, so the
+    # skip needs the stall condition (20 observations) plus the AT streak.
+    task._current_subgoal_index = 3
+    _walk(memory, 25, at=False)                       # frames 1..25, no AT
+    assert task.get_current_subgoal().subgoal_id == "4"
+    _walk(memory, 2, at=True, start=25)               # frames 26,27: AT x2, not enough
+    assert task.get_current_subgoal().subgoal_id == "4"
+    _walk(memory, 1, at=True, start=27)               # frame 28: AT x3
+    assert task.get_current_subgoal().subgoal_id == "6"
+    assert memory.diagnostics()["stage_skip"]["skipped"] == ["4", "5"]
+    assert "skipped stages 4, 5" in memory.diagnostics()["completion_guard"]
+    # The final stage is only activated, not completed.
+    assert task.is_task_complete() is False
+
+
+def test_destination_look_alike_early_in_the_route_does_not_skip():
+    task = TaskMemory("Route to the bathroom.", subgoals=_route_subgoals())
+    memory = TemporalMemory(captioner=_at_captioner(at_from_frame=0), task_memory=task)
+    # AT from the very first frame, but barely any distance walked and
+    # five stages remain: neither gate opens.
+    _walk(memory, 6, at=True, step_m=0.2)
+    assert task.get_current_subgoal().subgoal_id == "1"
+    assert memory.diagnostics()["stage_skip"] is None
+
+
+def test_skip_near_the_end_needs_no_stall():
+    task = TaskMemory("Route to the bathroom.", subgoals=_route_subgoals())
+    memory = TemporalMemory(captioner=_at_captioner(at_from_frame=11), task_memory=task)
+    task._current_subgoal_index = 4                   # stage 5: one stage remains
+    _walk(memory, 10, at=False)                       # frames 1..10, 4 m walked, no AT
+    _walk(memory, 3, at=True, start=10)               # frames 11,12,13: AT x3
+    assert task.get_current_subgoal().subgoal_id == "6"
+    assert memory.diagnostics()["stage_skip"]["skipped"] == ["5"]
+
+
+def test_single_at_report_is_not_enough():
+    task = TaskMemory("Route to the bathroom.", subgoals=_route_subgoals())
+    states = iter([False] * 10 + [True, False, True, False, True])
+
+    def factory(request):
+        return _scene_result(request, completed=False, final_visible=next(states), proximity="AT")
+
+    memory = TemporalMemory(captioner=SceneCaptioner(factory), task_memory=task)
+    task._current_subgoal_index = 4
+    _walk(memory, 15, at=None)
+    assert task.get_current_subgoal().subgoal_id == "5"
+
+
+def test_final_stage_accepts_at_streak_with_independent_stop_proposal():
+    task = TaskMemory(
+        "Walk to the pool.",
+        subgoals=(Subgoal("1", "Walk forward to the pool", "The camera is beside the pool."),),
+    )
+    # The scene model keeps completed=false while reporting AT.
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(request, completed=False, final_visible=True, proximity="AT")
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+
+    memory.append_observation(_frame(0))
+    assert memory.analyze().completed is False          # streak 1
+    memory.set_stop_proposed(True)
+    memory.append_observation(_frame(1))
+    result = memory.analyze()                            # streak 2 + STOP proposal
+    assert result.completed is True
+    assert task.is_task_complete()
+
+
+def test_final_stage_at_streak_of_three_suffices_without_stop_proposal():
+    task = TaskMemory(
+        "Walk to the pool.",
+        subgoals=(Subgoal("1", "Walk forward to the pool", "The camera is beside the pool."),),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(request, completed=False, final_visible=True, proximity="AT")
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    results = []
+    for index in range(3):
+        memory.append_observation(_frame(index))
+        results.append(memory.analyze().completed)
+    assert results == [False, False, True]
+
+
+def test_final_stage_near_is_never_accepted():
+    task = TaskMemory(
+        "Walk to the pool.",
+        subgoals=(Subgoal("1", "Walk forward to the pool", "The camera is beside the pool."),),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(request, completed=False, final_visible=True, proximity="NEAR")
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.set_stop_proposed(True)
+    for index in range(5):
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+
+
+def test_landmark_still_far_in_depth_map_vetoes_completion():
+    import numpy as np
+
+    task = TaskMemory("Exit the room and reach the pool.", subgoals=_subgoals())
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request, completed=True, destination_dominant=True,
+            door_state="CROSSED", door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()  # bind subgoal (rejected: no approach seen)
+
+    # The fake landmark sits at (500, 450); the depth map says 4 m there.
+    far = np.full((24, 32), 4.0, dtype=np.float32)
+    memory.set_depth_observation(far)
+    for index in range(1, 6):
+        memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+    assert "still 4.00 m away in the depth map" in memory.diagnostics()["completion_guard"]
+    assert task.get_current_subgoal().subgoal_id == "1"
+
+    # Same claims with the landmark 0.8 m away: the streak fallback applies.
+    memory.set_depth_observation(np.full((24, 32), 0.8, dtype=np.float32))
+    memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(6))
+    assert memory.analyze().completed is True
+
+
+def test_final_at_is_vetoed_while_destination_landmark_is_far():
+    import numpy as np
+
+    task = TaskMemory(
+        "Walk to the pool.",
+        subgoals=(Subgoal("1", "Walk forward to the pool", "The camera is beside the pool."),),
+    )
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(request, completed=False, final_visible=True, proximity="AT")
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.set_depth_observation(np.full((24, 32), 4.3, dtype=np.float32))
+    memory.set_stop_proposed(True)
+    for index in range(4):
+        memory.append_observation(_frame(index))
+        assert memory.analyze().completed is False
+    memory.set_depth_observation(np.full((24, 32), 0.9, dtype=np.float32))
+    memory.append_observation(_frame(4))
+    assert memory.analyze().completed is True
+
+
+def test_range_veto_is_lifted_once_committed_point_was_reached():
+    import numpy as np
+
+    task = TaskMemory("Exit the room and reach the pool.", subgoals=_subgoals())
+    captioner = SceneCaptioner(
+        lambda request: _scene_result(
+            request, completed=True, destination_dominant=True,
+            door_state="CROSSED", door_camera_side="AFTER_DOOR",
+        )
+    )
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()
+    memory.set_depth_observation(np.full((24, 32), 3.0, dtype=np.float32))
+    # Landmark far, but the camera passed the committed doorway point.
+    memory.set_committed_target_distance(0.3)
+    memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(1))
+    assert memory.analyze().completed is True
+
+
+def test_turn_stage_completes_when_landmark_is_centred_after_a_short_turn():
+    task = TaskMemory(
+        "Turn right to the sofa and go to it.",
+        subgoals=(
+            Subgoal("1", "Turn right toward the sofa", "After turning right, the sofa is centred in the view."),
+            Subgoal("2", "Walk to the sofa", "The sofa is directly ahead within a step."),
+        ),
+    )
+    # _scene_result reports the landmark at u=500 (centred), completed=False.
+    captioner = SceneCaptioner(lambda request: _scene_result(request, completed=False))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.append_observation(_frame(0))
+    memory.analyze()
+
+    memory.set_turn_progress(0.0)                 # centred but not turned yet
+    memory.append_observation(_frame(1))
+    assert memory.analyze().completed is False
+    memory.set_turn_progress(30.0)                # one or two primitives later
+    memory.append_observation(_frame(2))
+    assert memory.analyze().completed is True
     assert task.get_current_subgoal().subgoal_id == "2"

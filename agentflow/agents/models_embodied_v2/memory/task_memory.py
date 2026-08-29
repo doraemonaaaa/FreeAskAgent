@@ -82,6 +82,34 @@ class TaskMemory:
             return None
         return self._subgoals[index]
 
+    def get_final_subgoal(self) -> Optional[Any]:
+        """Return the last stage of the installed plan, if any."""
+        return self._subgoals[-1] if self._subgoals else None
+
+    def skip_to_final(self, reason: str) -> tuple[str, ...]:
+        """Jump the plan to its last stage; returns the ids skipped over.
+
+        Used when the destination itself has been verified in view while an
+        intermediate stage is stuck. The final stage is activated rather than
+        the task ended, so the destination still has to pass the ordinary
+        final-approach stop protocol.
+        """
+        if not self._subgoals:
+            return ()
+        last_index = len(self._subgoals) - 1
+        if self._current_subgoal_index >= last_index:
+            return ()
+        skipped = tuple(
+            str(item.subgoal_id)
+            for item in self._subgoals[self._current_subgoal_index:last_index]
+        )
+        self._current_subgoal_index = last_index
+        self.subgoal_completion_status = (
+            f"Skipped subgoals {', '.join(skipped)}: {reason}"
+        )
+        self.record_event("STAGE_SKIP", self.subgoal_completion_status)
+        return skipped
+
     def is_current_subgoal_final(self) -> bool:
         """Whether the active stage is the last stage in the installed plan."""
         return bool(self._subgoals) and self._current_subgoal_index == (

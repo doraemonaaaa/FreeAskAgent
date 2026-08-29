@@ -34,7 +34,16 @@ ERROR_CONFIRMATION_VOTES = 4
 # when the scene Captioner disagrees with repeated current-frame observations.
 FINAL_STOP_EVIDENCE_WINDOW = 5
 FINAL_STOP_EVIDENCE_VOTES = 2
-FINAL_STOP_MIN_CONFIDENCE = 0.90
+# The waypoint model's confidence is advisory only: Qwen3-VL-8B copied the
+# prompt's placeholder 0.0 into every reply of a full R2R-CE run, so any hard
+# confidence floor silently disabled STOP. Text grounding, the depth range
+# check, odometry against the committed target and repeated votes are the
+# gate instead.
+# The waypoint model claims arrival at a doorway as soon as the doorway is in
+# view, several metres out. A final STOP vote therefore also has to be range
+# grounded: the located target (or the forward band when it has no pixel)
+# must measure within this distance in the depth frame.
+FINAL_STOP_MAX_TARGET_RANGE_M = 2.5
 RECOVERY_FORWARD_U = 500
 RECOVERY_FORWARD_V = 750
 RECOVERY_TURN_U = 250
@@ -42,13 +51,38 @@ RECOVERY_TURN_V = 500
 RECOVERY_LATERAL_DISTANCE_M = 1.5
 RECOVERY_SUCCESS_TRANSLATION_M = 0.20
 PREVIEW_REARM_TRANSLATION_M = 0.25
+# A locked target further off the camera axis than this is still being
+# turned toward; same-sign rotation without translation is then the follower
+# aligning, not an in-place spin.
+LOCKED_TARGET_TURN_TOLERANCE_DEG = 20.0
 PREVIEW_SELECTION_MIN_CONFIDENCE = 0.60
 STALL_EVIDENCE_FRAMES = 4
 STALL_TRANSLATION_LIMIT_M = 0.20
 TURN_EVIDENCE_DEG = 5.0
 # Bound the unified temporal scene request. A larger window increases visual
 # token allocation on every step after the window fills.
-MAX_COMPLETION_EVIDENCE_FRAMES = 16
+# 16 frames at 320 px cost 6.6 s per Captioner call and raised its malformed
+# JSON rate from 9 % (one frame) to 36 %; eight frames keep the crossing
+# evidence while halving both.
+MAX_COMPLETION_EVIDENCE_FRAMES = 8
+# Judge a plain walk/approach stage every N observations instead of every
+# step. Doorway, turn and final stages are still judged on every step: their
+# completion depends on the exact frame in which the jambs pass or the target
+# is beside the camera.
+CAPTIONER_ANALYSIS_INTERVAL_STEPS = 2
+# Full single-line scene JSON is ~150 tokens; the model sometimes
+# pretty-prints it, which roughly doubles that, so leave headroom and let the
+# closing brace end generation early.
+CAPTIONER_MAX_TOKENS = 512
+# Spatial Memory committed targets (memory/spatial_memory): a world point the
+# agent walks to without re-querying the waypoint model. Released when
+# reached, walked past, not closer for STAGNATION steps, or older than
+# MAX_AGE steps. Points nearer than MIN_COMMIT are one step away and are
+# not worth committing to.
+SPATIAL_TARGET_MAX_AGE_STEPS = 12
+SPATIAL_TARGET_STAGNATION_STEPS = 6
+SPATIAL_TARGET_MIN_COMMIT_M = 0.6
+SPATIAL_LOOKAHEAD_M = 1.5
 # A doorway completion is normally released by geometry (the camera reached
 # the localized doorway) or by the model having reported the approach. When
 # neither happens -- the doorway point was mislocalized, or the model jumped
@@ -57,15 +91,42 @@ MAX_COMPLETION_EVIDENCE_FRAMES = 16
 # are accepted instead of holding the subgoal shut for the whole episode.
 DOORWAY_CROSSED_STREAK_ACCEPT = 4
 DOORWAY_CROSSED_MIN_PATH_M = 1.0
-DOORWAY_CROSSED_MIN_CONFIDENCE = 0.90
-# Geometry outranks the model. Once the camera has come within
-# DOORWAY_REACHED_M of the localized doorway point that fact is latched for
-# the subgoal, so a crossing reported a few steps later is still accepted.
-# While the point is farther than DOORWAY_STILL_AHEAD_M and was never
-# reached, a CROSSED claim is contradicted by measurement and rejected no
-# matter how confident or repeated it is.
-DOORWAY_REACHED_M = 0.50
-DOORWAY_STILL_AHEAD_M = 1.00
+# Geometry outranks the model. A subgoal is judged on arrival, not en route:
+# while the actor still holds a committed waypoint for the subgoal (a
+# localized doorway or landmark point) that is farther than
+# COMMITTED_TARGET_REACHED_M and was never reached, any completion the model
+# reports is deferred. Coming within that distance is latched for the
+# subgoal, so a completion reported a few steps later is still accepted.
+COMMITTED_TARGET_REACHED_M = 0.50
+DOORWAY_REACHED_M = COMMITTED_TARGET_REACHED_M
+# A point localized from far away carries a proportionally larger error
+# (pixel error times depth), so its arrival tolerance grows with the distance
+# it was localized from, between the two bounds.
+COMMITTED_TARGET_TOLERANCE_FRACTION = 0.25
+COMMITTED_TARGET_TOLERANCE_MAX_M = 1.00
+# Skipping ahead to the final stage. The destination must be reported AT with
+# high confidence for several consecutive observations, and the plan must
+# plausibly be near its end: either only a couple of stages remain, or the
+# active stage has been stuck for many observations. A minimum walked
+# distance rules out a look-alike seen right after the start.
+STAGE_SKIP_AT_STREAK = 3
+STAGE_SKIP_MIN_CONFIDENCE = 0.80
+STAGE_SKIP_MAX_REMAINING_STAGES = 2
+STAGE_SKIP_STALL_OBSERVATIONS = 20
+STAGE_SKIP_MIN_TASK_PATH_M = 3.0
+# The model's own landmark for the active stage, measured through the depth
+# map at the pixel it reported: a doorway "crossed" or a destination "AT"
+# that is still farther than this is contradicted by measurement.
+LANDMARK_RANGE_VETO_M = 1.5
+# A stairs stage is complete when the camera has risen or dropped this much
+# in the requested direction and its height has levelled off again.
+STAIRS_MIN_RISE_M = 0.30
+STAIRS_LEVEL_TOLERANCE_M = 0.05
+# A turn subgoal cannot be complete before the camera has measurably turned
+# this far in the requested direction; past TURN_ABANDON_DEG it has turned a
+# half circle and the turn phase ends regardless of what the model asks for.
+TURN_MIN_PROGRESS_DEG = 60.0
+TURN_ABANDON_DEG = 180.0
 # Bound every online visual request. Temporal-memory requests are also resized
 # by TemporalCaptioner before reaching the engine.
 VLM_IMAGE_MIN_PIXELS = 64**2
@@ -77,13 +138,25 @@ VLM_IMAGE_MAX_PIXELS = 448**2
 TEMPORAL_MAX_IMAGE_EDGE = 320
 # Below this Captioner confidence a localized landmark is not trusted to
 # override the waypoint model's own TURN/PREVIEW request.
-LANDMARK_STEER_MIN_CONFIDENCE = 0.60
+# A landmark the Captioner marks visible with a pixel is a structured claim
+# that the depth veto (LANDMARK_RANGE_VETO_M) and committed-point odometry
+# already check; its confidence field is advisory (see FINAL_STOP note).
+LANDMARK_STEER_MIN_CONFIDENCE = 0.0
+# A turn stage is satisfied the moment its landmark sits within this band
+# of the image centre (normalized 0..1000; 150 is about 13 degrees at a
+# 90-degree field of view). Turning further only turns away from it.
+TURN_TARGET_CENTRED_U = 150
+# ...provided the camera has actually turned at least one primitive; a
+# landmark already centred before any rotation is not a completed turn.
+TURN_TARGET_MIN_PROGRESS_DEG = 15.0
 # The actor schema is now a nested discriminated union, which costs roughly
 # twenty-five more tokens per reply than the flat waypoint shape.  At the
 # previous 64-token budget a typical reply would truncate before its closing
 # braces, and a truncated reply fails validation and silently degrades into the
 # safe fallback waypoint.  A PREVIEW reply is far shorter and ends early.
-STRUCTURED_VLM_MAX_TOKENS = 96
+# 96 tokens truncated ~3 % of replies once the evidence clause grew; 192
+# leaves room for the nested shape plus a 20-word evidence.
+STRUCTURED_VLM_MAX_TOKENS = 192
 BEHAVIOR_HISTORY_SIZE = 8
 LANDMARK_HISTORY_SIZE = 6
 CORRIDOR_LOCK_FORWARD_STEPS = 2
@@ -141,14 +214,25 @@ negative one. Never request more than 45 degrees in one decision. The camera
 will observe again after that short turn, so ask only for the smallest turn that
 brings the route into view.
 
-Reply only with one exact JSON object, in one of these four shapes:
-{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"FOLLOW_CORRIDOR","u":integer,"v":integer},"confidence":0.0,"evidence":"brief visual reason"}
-{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"TURN_RIGHT","turn_deg":30},"confidence":0.0,"evidence":"brief visual reason"}
-{"action_mode":"EXPLORATION","exploration":{"intent":"APPROACH_LANDMARK","u":integer,"v":integer},"confidence":0.0,"evidence":"brief visual reason"}
-{"action_mode":"PREVIEW","preview":true,"confidence":0.0,"evidence":"brief visual reason"}
+Reply with exactly one single-line JSON object and nothing else, in one of
+these four shapes. Angle brackets mark values YOU fill in from the image; they
+are types, not defaults, so never copy a placeholder and never reuse an
+earlier answer's numbers. u and v are the pixel you actually chose: a point
+straight ahead near u=500,v=750 is correct only when the open floor really is
+there.
+{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"<FOLLOW_CORRIDOR|APPROACH_LANDMARK|FINAL_APPROACH>","u":<int 0-1000>,"v":<int 0-1000>},"confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"<TURN_LEFT|TURN_RIGHT>","turn_deg":<-45|-30|-15|15|30|45>},"confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+{"action_mode":"EXPLORATION","exploration":{"intent":"<FOLLOW_CORRIDOR|APPROACH_LANDMARK|FINAL_APPROACH>","u":<int 0-1000>,"v":<int 0-1000>},"confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+{"action_mode":"PREVIEW","preview":true,"confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+
+confidence is your own probability that this action is the right one for the
+active subgoal: about 0.9 when the route is obvious, about 0.5 when two
+options are plausible, about 0.2 when guessing. It is never 0.0 for an action
+you chose. Keep evidence to one short clause with no line breaks, no
+indentation and no markdown fences.
 
 The target may be one subgoal of a longer route, numbered "(n of m)". Use
-{"action_mode":"EXECUTION","execution":{"stop":true,"intent":"STOP"},"confidence":0.0,"evidence":"brief visual reason"}
+{"action_mode":"EXECUTION","execution":{"stop":true,"intent":"STOP"},"confidence":<float 0-1>,"evidence":"<at most 20 words>"}
 only when the active subgoal is final and the destination is at immediate
 stopping distance. A STOP response is a proposal: the controller requires
 repeated near-field evidence or completed Task Memory before issuing Habitat
@@ -166,32 +250,35 @@ exactly this form, and output nothing else 鈥?no JSON, no brackets, no bullets,
 no commentary, no blank lines:
 id|description|completion criterion
 
-Example of a complete two-stage answer:
-1|Walk down the hall to the marked doorway|The camera is at the doorway where the next left turn can be executed
-2|Turn left and enter the kitchen|The camera has crossed the threshold and the kitchen interior is central in the view
+Example of a complete answer:
+1|Go up the stairs|The camera has passed the stairs: they are below and behind it and the upper hallway fills the view
+2|Walk down the hall to the marked doorway|The marked doorway is directly ahead of the camera, within a step
+3|Turn left at the marked doorway|After turning left, the kitchen entrance is centred in the view
+4|Enter the kitchen|The camera has crossed the kitchen threshold and the kitchen interior is central in the view
 
 Rules:
 1. One stage per line, in instruction order, with IDs counting 1, 2, 3 with no
    gaps. Each line holds exactly three fields separated by two "|" characters;
    never write "|" inside a description or a criterion.
-2. Every completion criterion must describe a visually verifiable endpoint,
+2. Every stage is ONE atomic action: a walk to a landmark, a doorway
+   crossing, a single turn, or a corridor follow. Never join two actions with
+   "and", "then" or a comma. "Enter the bedroom and turn left" is two stages.
+3. Every completion criterion must describe a visually verifiable endpoint,
    never an action merely being attempted or currently in progress.
-3. A movement clause immediately followed by a turn at a landmark completes
-   only when the agent reaches that named landmark or decision point. For
-   example, "walk down the hall; turn left at the marked doorway" means the
-   walking stage completes upon reaching that doorway, not while moving.
-   Do not require stopping at an intermediate landmark. Its criterion must not
-   claim that the agent has already passed, turned at, or aligned beyond that
-   landmark; those belong to the following turn stage.
-4. A doorway-exit stage completes when the camera reaches or crosses the
-   doorway threshold and the destination room becomes the central/dominant
-   view. Brief peripheral visibility of the starting room does not invalidate
-   a crossing; do not require it to disappear completely.
-5. A turn completes only after reaching its landmark, executing the requested
-   turn, and aligning with the next route.
-6. Final arrival requires reaching and stopping beside the destination;
+4. A stage that walks TO a landmark completes when that landmark is beside
+   or directly ahead of the camera, within a step. A stage that goes UP,
+   DOWN, THROUGH or ALONG something (stairs, a hallway, a room) completes
+   when that thing has been passed: it is behind or below the camera and the
+   space beyond it fills the view. Neither may claim the agent has already
+   turned; that belongs to the turn stage.
+5. A turn stage's criterion names what must be centred in the view after the
+   turn: the landmark or opening of the following stage.
+6. A doorway-crossing stage completes when the camera crosses the threshold
+   and the destination room becomes the central/dominant view. Brief
+   peripheral visibility of the starting room does not invalidate a crossing.
+7. Final arrival requires reaching and stopping beside the destination;
    merely seeing it at a distance is insufficient.
-7. Never add route geometry absent from the instruction. In particular,
+8. Never add route geometry absent from the instruction. In particular,
    "around" an object does not mean a full circuit, returning to the start,
    or completing a loop unless the instruction explicitly says so."""
 

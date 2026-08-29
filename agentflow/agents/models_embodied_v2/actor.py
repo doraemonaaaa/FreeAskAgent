@@ -59,12 +59,21 @@ class Actor:
             raise ValueError(
                 "patch_radius_px and depth spread must be non-negative."
             )
-        self.llm = engine or create_llm_engine(
-            model_string=f"local-qwen3vl-{model_path}",
-            is_multimodal=True,
-            use_cache=use_cache,
-            debug_performance=debug_performance,
-        )
+        if engine is not None:
+            self.llm = engine
+        elif model_path.startswith("vllm-"):
+            # ``vllm-<served-model-name>`` talks to a vLLM OpenAI server
+            # (``VLLM_BASE_URL``) instead of loading the checkpoint here.
+            from agentflow.agents.engine.remote_qwen3vl import RemoteQwen3VL
+
+            self.llm = RemoteQwen3VL(model_path[len("vllm-"):])
+        else:
+            self.llm = create_llm_engine(
+                model_string=f"local-qwen3vl-{model_path}",
+                is_multimodal=True,
+                use_cache=use_cache,
+                debug_performance=debug_performance,
+            )
         self.min_depth_m = min_depth_m
         self.max_depth_m = max_depth_m
         self.patch_radius_px = patch_radius_px

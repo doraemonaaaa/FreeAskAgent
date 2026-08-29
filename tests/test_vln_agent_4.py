@@ -462,7 +462,7 @@ def test_localized_landmark_overrides_model_turn_with_floor_waypoint():
     assert decision.point.on_floor is True
     assert agent.last_requested_normalized == (760, 640)
     assert agent.last_requested_turn_deg is None
-    assert "overrode model TURN" in agent.last_waypoint_guard_reason
+    assert "beneath the located landmark" in agent.last_waypoint_guard_reason
     # Landmark column, snapped down onto the floor in front of the doorway.
     assert decision.point.pixel_uv[0] == round(760 * 31 / 1000)
     assert abs(decision.point.world_xyz[1]) <= agent.actor.max_floor_offset_m
@@ -517,3 +517,485 @@ def test_off_floor_point_is_not_locked_as_doorway():
     assert decision.point.on_floor is False
     assert agent._doorway_waypoint is None
     assert "not locked" in agent.last_waypoint_guard_reason
+
+
+def _turned(camera_to_world, yaw_deg):
+    """Rotate a camera-to-world transform about +y (positive turns right)."""
+    angle = np.deg2rad(-yaw_deg)
+    rotation = np.array(
+        (
+            (np.cos(angle), 0.0, np.sin(angle)),
+            (0.0, 1.0, 0.0),
+            (-np.sin(angle), 0.0, np.cos(angle)),
+        )
+    )
+    turned = np.array(camera_to_world, dtype=np.float64)
+    turned[:3, :3] = rotation @ turned[:3, :3]
+    return turned
+
+
+class TurnThenHallwayEngine(RoutedEngine):
+    """Planner emits a compound turn stage; waypoint model always wants to turn."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            label = "plan"
+            response = (
+                "1|Turn left and proceed through the hallway|"
+                "The camera is moving through the hallway"
+            )
+        elif system_prompt.startswith("You are the temporal scene observer"):
+            label = "scene"
+            response = SCENE_IN_PROGRESS
+        elif system_prompt.startswith("You are an indoor navigation actor"):
+            label = "waypoint"
+            response = WAYPOINT_TURN_RIGHT.replace(
+                '"intent":"TURN_RIGHT","turn_deg":30',
+                '"intent":"TURN_LEFT","turn_deg":-30',
+            )
+        else:
+            raise AssertionError("unexpected independent VLM call")
+        self.calls.append((label, content, kwargs))
+        return response
+
+
+def test_turn_stage_phase_ends_on_measured_rotation_not_model_requests():
+    engine = TurnThenHallwayEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Turn left and go through the hallway."
+    agent.prepare_task(instruction)
+    # The compound stage was split: the turn is its own stage.
+    assert [s.description for s in agent.subgoals] == [
+        "Turn left",
+        "Proceed through the hallway",
+    ]
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    base = np.eye(4)
+    base[1, 3] = 1.25
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+
+    decision = agent.act(rgb, _room_depth(), instruction, intrinsics, base)
+    assert agent._navigation_phase == "TURN_LEFT"
+    assert decision.turn_deg == -30
+
+    # Camera has physically rotated 75 degrees left: the turn is done even
+    # though the model keeps asking for more, and the judge sees it too.
+    for yaw in (-30.0, -60.0, -75.0):
+        decision = agent.act(
+            rgb, _room_depth(), instruction, intrinsics, _turned(base, yaw)
+        )
+    # The measured rotation both ends the turn phase and completes the turn
+    # stage itself, so the hallway stage -- the last one, hence a final
+    # approach -- is active now.
+    assert agent._navigation_phase == "FINAL_APPROACH"
+    assert agent.task_memory.get_current_subgoal().subgoal_id == "2"
+    assert agent.temporal_memory.diagnostics()["turn_progress_deg"] == 0.0
+
+
+def test_turn_stage_is_abandoned_after_half_a_circle():
+    engine = TurnThenHallwayEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Turn left and go through the hallway."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    base = np.eye(4)
+    base[1, 3] = 1.25
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+    # Model asks LEFT but the measured rotation goes the wrong way; after a
+    # half circle the turn phase ends regardless.
+    agent.act(rgb, _room_depth(), instruction, intrinsics, base)
+    for yaw in (45.0, 90.0, 135.0, 180.0):
+        agent.act(rgb, _room_depth(), instruction, intrinsics, _turned(base, yaw))
+    assert agent._navigation_phase == "FOLLOW_CORRIDOR"
+
+
+def test_walking_past_a_locked_waypoint_counts_as_reached():
+    from agentflow.agents.models_embodied_v2.data_models import NavigationPoint
+
+    point = NavigationPoint(
+        pixel_uv=(0, 0), depth_m=1.0, camera_xyz=(0.0, 0.0, -1.0),
+        world_xyz=(0.0, 0.0, -1.0), on_floor=True,
+    )
+    ahead = np.eye(4)  # camera at origin looking down -z: point is 1 m ahead
+    assert VLNAgent._waypoint_passed(point, camera_to_world=ahead) is False
+    behind = np.eye(4)
+    behind[2, 3] = -1.6  # walked 0.6 m past the point on the same heading
+    assert VLNAgent._waypoint_passed(point, camera_to_world=behind) is True
+    far_behind = np.eye(4)
+    far_behind[2, 3] = -2.5
+    assert VLNAgent._waypoint_passed(point, camera_to_world=far_behind) is False
+
+
+def test_final_stage_is_final_approach_and_never_locks_a_landmark():
+    class PoolAheadEngine(RoutedEngine):
+        def __call__(self, content, *, system_prompt, **kwargs):
+            if system_prompt.startswith("You are an indoor navigation task planner"):
+                response = (
+                    "1|Exit through the doorway|The camera has crossed the threshold\n"
+                    "2|Walk forward to the pool|The pool is directly ahead and within a step of the camera"
+                )
+                label = "plan"
+            elif system_prompt.startswith("You are the temporal scene observer"):
+                response = SCENE_DOOR_VISIBLE_RIGHT
+                label = "scene"
+            elif system_prompt.startswith("You are an indoor navigation actor"):
+                response = WAYPOINT_TURN_RIGHT
+                label = "waypoint"
+            else:
+                raise AssertionError("unexpected independent VLM call")
+            self.calls.append((label, content, kwargs))
+            return response
+
+    agent = VLNAgent(engine=PoolAheadEngine(), patch_radius_px=0, camera_height_m=1.25)
+    agent.prepare_task("exit into the pool room and stop before pool.")
+    final = agent.subgoals[-1]
+    assert agent._phase_for_subgoal(final) == "FINAL_APPROACH"
+    assert agent._phase_for_subgoal(agent.subgoals[0]) != "FINAL_APPROACH"
+
+    # Drive the final stage directly: a localized landmark steers the step but
+    # must not become a reused target that bypasses the waypoint model.
+    agent.task_memory.reset(goal="stop before pool.", subgoals=(final,))
+    agent.subgoals = [final]
+    intrinsics = np.array(((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0)))
+    camera_to_world = np.eye(4)
+    camera_to_world[1, 3] = 1.25
+    agent.act(np.zeros((24, 32, 3), dtype=np.uint8), _room_depth(), "stop before pool.", intrinsics, camera_to_world)
+    assert agent._navigation_phase == "FINAL_APPROACH"
+    assert agent._doorway_waypoint is None
+
+
+def test_spin_release_keeps_committed_point_as_judge_evidence():
+    from agentflow.agents.models_embodied_v2.data_models import NavigationPoint, Subgoal
+
+    engine = DoorwayTurnEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    agent.prepare_task("exit into the pool room and stop before pool.")
+    current = agent.task_memory.get_current_subgoal()
+    point = NavigationPoint(
+        pixel_uv=(0, 0), depth_m=4.0, camera_xyz=(0.0, 0.0, -4.0),
+        world_xyz=(0.0, 0.0, -4.0), on_floor=True,
+    )
+    agent._doorway_waypoint = point
+    agent._doorway_waypoint_subgoal_id = current.subgoal_id
+    agent._doorway_waypoint_reach_tolerance_m = 1.0
+
+    agent._clear_doorway_waypoint(keep_for_judge=True)
+    assert agent._doorway_waypoint is None
+    camera_to_world = np.eye(4)
+    camera_to_world[1, 3] = 1.25
+    assert agent._doorway_target_distance(current, camera_to_world=camera_to_world) == 4.0
+    assert agent._judge_target_tolerance(current) == 1.0
+
+    agent._clear_doorway_waypoint()
+    assert agent._doorway_target_distance(current, camera_to_world=camera_to_world) is None
+
+
+SCENE_SOFA_CENTRED = SCENE_DOOR_VISIBLE_RIGHT.replace('"u":760,"v":640', '"u":520,"v":640').replace(
+    '"direction":"RIGHT"', '"direction":"CENTER"'
+).replace('"door_state":"APPROACHING"', '"door_state":"NOT_APPLICABLE"').replace(
+    '"door_camera_side":"BEFORE_DOOR"', '"door_camera_side":"NOT_APPLICABLE"'
+).replace('"door_transition":"APPROACHED"', '"door_transition":"NOT_APPLICABLE"').replace(
+    '"current_room_side":"ORIGINAL_SIDE"', '"current_room_side":"NOT_APPLICABLE"'
+)
+
+
+class TurnToSofaEngine(RoutedEngine):
+    """Turn stage; the model keeps asking to turn although the sofa is centred."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            label, response = "plan", (
+                "1|Turn right toward the sofa|After turning right, the sofa is centred in the view\n"
+                "2|Walk to the sofa|The sofa is directly ahead within a step"
+            )
+        elif system_prompt.startswith("You are the temporal scene observer"):
+            label, response = "scene", SCENE_SOFA_CENTRED
+        elif system_prompt.startswith("You are an indoor navigation actor"):
+            label, response = "waypoint", WAYPOINT_TURN_RIGHT
+        else:
+            raise AssertionError("unexpected independent VLM call")
+        self.calls.append((label, content, kwargs))
+        return response
+
+
+def test_visible_landmark_ends_the_turn_and_is_walked_to_not_turned_toward():
+    engine = TurnToSofaEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Turn right to the sofa."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0)))
+    base = np.eye(4)
+    base[1, 3] = 1.25
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+
+    # Step 0: model wants TURN_RIGHT, but the sofa is already located ->
+    # walked to, not turned toward.
+    first = agent.act(rgb, _room_depth(), instruction, intrinsics, base)
+    assert first.turn_deg is None and first.point is not None
+    assert agent.last_requested_normalized == (520, 640)
+    # The located landmark is committed during the turn stage as well.
+    assert agent._doorway_waypoint is not None
+    # The prompt no longer demands a turn once the landmark is in view.
+    waypoint_prompt = engine.calls[-1][1][0]
+    assert "requested turn is satisfied" in waypoint_prompt
+
+    # After one 30-degree primitive the centred landmark ends the turn stage.
+    agent.act(rgb, _room_depth(), instruction, intrinsics, _turned(base, 30.0))
+    assert agent.task_memory.get_current_subgoal().subgoal_id == "2"
+
+
+class SofaPreviewEngine(PreviewRoutedEngine):
+    """Two-stage plan whose first stage names no door at all."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            self.calls.append(("plan", content, kwargs))
+            return (
+                "1|Walk toward the sofa|The sofa is directly ahead\n"
+                "2|Stop beside the lamp|The lamp is beside the camera"
+            )
+        if system_prompt.startswith("You are judging which way"):
+            self.calls.append(("preview", content, kwargs))
+            return (
+                '{"view_index":0,"u":300,"v":800,"confidence":0.95,'
+                '"evidence":"left view shows the sofa with floor in front"}'
+            )
+        return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+
+def _yaw_transform(yaw_deg: float) -> np.ndarray:
+    transform = np.eye(4)
+    c, s = np.cos(np.radians(yaw_deg)), np.sin(np.radians(yaw_deg))
+    transform[0, 0], transform[0, 2] = c, s
+    transform[2, 0], transform[2, 2] = -s, c
+    return transform
+
+
+def test_captioner_selected_preview_target_is_locked_until_reached():
+    engine = SofaPreviewEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0)
+    instruction = "Walk toward the sofa, then stop beside the lamp."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+    depth = np.full((24, 32), 2.0, dtype=np.float32)
+    first = agent.act(rgb, depth, instruction, intrinsics, np.eye(4))
+    assert first.action_mode == "PREVIEW"
+    # The selected view faces 90 degrees left; its floor point lies well off
+    # the agent's own camera axis.
+    views = tuple(
+        PreviewView(
+            yaw_deg=yaw,
+            rgb=rgb,
+            depth=np.full((24, 32), 3.0, dtype=np.float32),
+            intrinsics=intrinsics,
+            camera_to_world=_yaw_transform(yaw),
+        )
+        for yaw in (-90.0, 0.0, 90.0)
+    )
+    committed = agent.act_on_preview(views, instruction)
+    assert committed.point is not None
+    assert agent._doorway_waypoint is committed.point
+    assert abs(agent._waypoint_bearing_deg(
+        committed.point, camera_to_world=np.eye(4)
+    )) > 45.0
+    waypoint_calls = sum(label == "waypoint" for label, _, _ in engine.calls)
+
+    # One 15-degree primitive later the target is reused as-is: no PREVIEW,
+    # no straight-ahead fallback, no second waypoint VLM call.
+    again = agent.act(rgb, depth, instruction, intrinsics, _yaw_transform(15.0))
+    assert again.action_mode == "EXECUTION"
+    assert again.point is committed.point
+    assert "reused stable doorway world waypoint" in agent.last_waypoint_guard_reason
+    assert sum(label == "waypoint" for label, _, _ in engine.calls) == waypoint_calls
+
+
+def test_waypoint_bearing_is_signed_right_positive():
+    from agentflow.agents.models_embodied_v2.data_models import NavigationPoint
+
+    point = NavigationPoint(
+        pixel_uv=(0, 0), depth_m=1.0,
+        camera_xyz=(1.0, 0.0, 0.0), world_xyz=(1.0, 0.0, 0.0),
+    )
+    assert VLNAgent._waypoint_bearing_deg(point, camera_to_world=np.eye(4)) == 90.0
+    ahead = NavigationPoint(
+        pixel_uv=(0, 0), depth_m=1.0,
+        camera_xyz=(0.0, 0.0, -2.0), world_xyz=(0.0, 0.0, -2.0),
+    )
+    assert VLNAgent._waypoint_bearing_deg(ahead, camera_to_world=np.eye(4)) == 0.0
+
+
+def test_reached_locked_waypoint_is_released_and_does_not_rearm():
+    from agentflow.agents.models_embodied_v2.data_models import NavigationPoint
+
+    engine = SofaPreviewEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0)
+    agent.prepare_task("Walk toward the sofa, then stop beside the lamp.")
+    current = agent.task_memory.get_current_subgoal()
+    point = NavigationPoint(
+        pixel_uv=(0, 0), depth_m=3.0,
+        camera_xyz=(0.0, 0.0, -3.0), world_xyz=(0.0, 0.0, -3.0),
+    )
+    agent._doorway_waypoint = point
+    agent._doorway_waypoint_subgoal_id = current.subgoal_id
+    agent._doorway_waypoint_reach_tolerance_m = 0.75
+
+    far = np.eye(4)
+    assert agent._locked_doorway_decision(current, camera_to_world=far) is not None
+
+    # Within tolerance: control is handed back and the point is kept only as
+    # judge evidence.
+    near = np.eye(4)
+    near[2, 3] = -2.5
+    assert agent._locked_doorway_decision(current, camera_to_world=near) is None
+    assert agent._doorway_waypoint is None
+    assert agent._judge_target_point is point
+
+    # Drifting past the tolerance again must not revive the old target.
+    assert agent._locked_doorway_decision(current, camera_to_world=far) is None
+
+
+def test_final_stop_vote_requires_measured_near_range():
+    engine = FinalStopEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0)
+    instruction = "Walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+    # The text says "directly beside the pool" every step, but the forward
+    # band measures 3.5 m: no vote, the STOP stays deferred.
+    far = np.full((24, 32), 3.5, dtype=np.float32)
+    for _ in range(3):
+        decision = agent.act(rgb, far, instruction, intrinsics, np.eye(4))
+        assert decision.stop is False
+        assert agent.last_waypoint_stop_disposition == "deferred_unverified_final"
+        assert "beyond 2.5m" in agent.last_waypoint_guard_reason
+    # Once the frame actually measures close, two votes end the episode.
+    near = np.full((24, 32), 1.0, dtype=np.float32)
+    agent.act(rgb, near, instruction, intrinsics, np.eye(4))
+    decision = agent.act(rgb, near, instruction, intrinsics, np.eye(4))
+    assert decision.stop is True
+    assert agent.last_waypoint_stop_disposition == "accepted_repeated_visual_final"
+
+
+class TwoStageWalkEngine(RoutedEngine):
+    """A plain approach stage followed by the final stage."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            self.calls.append(("plan", content, kwargs))
+            return (
+                "1|Walk forward to the sofa|The sofa is directly ahead\n"
+                "2|Walk forward to the pool area|"
+                "The camera is directly beside the pool"
+            )
+        return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+
+def test_plain_walk_stage_is_judged_every_other_step_after_its_first():
+    from agentflow.agents.models_embodied_v2.skiils.protocol import (
+        CAPTIONER_ANALYSIS_INTERVAL_STEPS,
+    )
+
+    assert CAPTIONER_ANALYSIS_INTERVAL_STEPS == 2
+    engine = TwoStageWalkEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0)
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(
+        ((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0))
+    )
+    for step in range(4):
+        camera_to_world = np.eye(4)
+        camera_to_world[2, 3] = -0.25 * step  # measured forward progress
+        decision = agent.act(
+            np.zeros((24, 32, 3), dtype=np.uint8),
+            np.full((24, 32), 2.0, dtype=np.float32),
+            instruction,
+            intrinsics,
+            camera_to_world,
+        )
+        assert decision.stop is False
+
+    labels = [label for label, _, _ in engine.calls]
+    # Step 0 (first observation of the stage) and step 2 are judged; steps 1
+    # and 3 keep their frames for the next judgement but skip the Captioner.
+    # The waypoint model answers once: its point becomes a Spatial Memory
+    # target that steps 1-3 keep walking to without another call.
+    assert labels == ["plan", "scene", "waypoint", "scene"]
+    assert agent.temporal_memory.diagnostics()["frame_ids"] == [1, 2, 3, 4]
+    assert agent.spatial_memory.target is not None
+    assert agent.spatial_memory.target.kind == "model_waypoint"
+    assert "reused spatial target" in agent.last_waypoint_guard_reason
+
+
+def _room_depth_for_agent(height=96, width=128, fy=40.0, cy=48.0, camera_height=1.25):
+    """Flat floor ahead of a level camera, far returns elsewhere."""
+    vs = np.arange(height, dtype=np.float64)[:, None]
+    below = vs - cy
+    floor = np.where(below > 0, camera_height * fy / np.maximum(below, 1e-6), 6.0)
+    return np.broadcast_to(np.minimum(floor, 6.0), (height, width)).astype(np.float32).copy()
+
+
+def test_spatial_target_is_walked_to_then_released_and_final_stage_keeps_the_model():
+    engine = TwoStageWalkEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((40.0, 0.0, 64.0), (0.0, 40.0, 48.0), (0.0, 0.0, 1.0)))
+    depth = _room_depth_for_agent()
+    rgb = np.zeros((96, 128, 3), dtype=np.uint8)
+
+    def act(z):
+        pose = np.eye(4)
+        pose[1, 3] = 1.25
+        pose[2, 3] = z
+        return agent.act(rgb, depth, instruction, intrinsics, pose)
+
+    first = act(0.0)
+    assert first.point is not None and first.point.on_floor
+    target = agent.spatial_memory.target
+    assert target is not None and target.kind == "model_waypoint"
+    target_z = target.world_xyz[2]
+    assert target_z < -0.6  # a real distance ahead, not the next step
+
+    # Walk toward it: no waypoint-model call while the target is active, and
+    # the reported point lies on the route to it.
+    calls_before = len([l for l, _, _ in engine.calls if l == "waypoint"])
+    z = 0.0
+    for _ in range(12):
+        z -= 0.25
+        decision = act(z)
+        if agent.spatial_memory.last_release_reason in ("reached", "passed"):
+            break
+        assert decision.point is not None
+        assert decision.point.world_xyz[2] <= z + 0.05
+        assert "reused spatial target" in agent.last_waypoint_guard_reason
+    calls_after = len([l for l, _, _ in engine.calls if l == "waypoint"])
+    # Exactly one more call: the re-query once the target was reached, which
+    # committed the next target in the same step.
+    assert calls_after == calls_before + 1
+    assert agent.spatial_memory.last_release_reason in ("reached", "passed")
+    assert agent.spatial_memory.target is not None
+    assert agent.spatial_memory.diagnostics()["observations"] >= 2
+    assert agent.spatial_memory.grid.explored_area_m2() > 1.0
+
+    # The final stage never commits: STOP must stay a per-step model decision.
+    agent.task_memory.reset(goal=instruction, subgoals=agent.subgoals[1:])
+    agent.temporal_memory.reset()
+    agent.spatial_memory.reset()
+    agent.subgoals = list(agent.subgoals[1:])
+    calls_before = len([l for l, _, _ in engine.calls if l == "waypoint"])
+    for _ in range(3):
+        z -= 0.25
+        act(z)
+    assert len([l for l, _, _ in engine.calls if l == "waypoint"]) == calls_before + 3
+    assert agent.spatial_memory.target is None

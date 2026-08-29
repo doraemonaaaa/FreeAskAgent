@@ -143,10 +143,13 @@ when the recent ordered evidence is clear:
 - IN_PLACE_SPIN: rotation returns to earlier views without progress;
 - GET_NOWHERE: no meaningful progress despite attempted navigation.
 
-Set error=false and error_mode=NONE when there is no clear error. Confidence
-must be in [0,1], and evidence must briefly ground the judgement in the recent
-views and motion. Output only:
-{"error":false,"error_mode":"NONE","confidence":0.0,"evidence":"..."}"""
+Set error=false and error_mode=NONE when there is no clear error. confidence
+is your own probability, in [0,1], that the judgement is right (about 0.9
+when obvious, 0.5 when uncertain, 0.2 when guessing; never 0.0 as a default),
+and evidence must briefly ground the judgement in the recent views and
+motion. Output only one single-line JSON object; angle brackets are values you
+fill in, not placeholders to copy:
+{"error":<true|false>,"error_mode":"<NONE|WALL_STUCK|TURN_OSCILLATION|IN_PLACE_SPIN|GET_NOWHERE>","confidence":<float 0-1>,"evidence":"<at most 20 words>"}"""
 
 
 DOOR_SCENE_SYSTEM_PROMPT = """You are the temporal scene observer specialized in verifying physical doorway
@@ -199,11 +202,27 @@ door_camera_side=AFTER_DOOR, door_transition=PASSED_THROUGH,
 current_room_side=FAR_SIDE, and landmark.destination_dominant=true.
 Otherwise completed=false. Diagnose an
 execution error only when the multi-frame evidence is clear; otherwise use
-NONE. This doorway subgoal is not the final target, so final_target is always
-invisible/UNKNOWN.
+NONE. final_target refers to the route's FINAL DESTINATION named in the
+input, never to this doorway: report it whenever it is actually in view
+(visible with FAR, NEAR or AT), otherwise invisible/UNKNOWN. AT only when the
+camera is directly beside that destination, or, for a positional destination
+such as "just inside the doorway", standing at it with that doorway's jambs
+beside or just behind the camera; a look-alike the route has not led to yet
+is FAR.
 
-Return only this exact compact JSON shape:
-{"door_state":"NOT_VISIBLE","door_camera_side":"UNKNOWN","door_transition":"NONE","current_room_side":"AMBIGUOUS","landmark":{"visible":false,"direction":"UNKNOWN","proximity":"UNKNOWN","passed":false,"destination_dominant":false,"u":null,"v":null,"confidence":0.0},"completed":false,"completion_confidence":0.0,"error_mode":"NONE","error_confidence":0.0,"final_target":{"visible":false,"proximity":"UNKNOWN","confidence":0.0},"evidence":"brief frame-grounded reason"}"""
+Reply with exactly one single-line JSON object with these keys and value
+types. Angle brackets are values you fill in from the frames; they are types,
+never placeholders to copy:
+{"door_state":"<NOT_VISIBLE|APPROACHING|AT_THRESHOLD|CROSSING|CROSSED>","door_camera_side":"<UNKNOWN|BEFORE_DOOR|AT_DOOR|AFTER_DOOR>","door_transition":"<NONE|TURNED_AWAY|APPROACHED|PASSED_THROUGH>","current_room_side":"<ORIGINAL_SIDE|FAR_SIDE|AMBIGUOUS>","landmark":{"visible":<true|false>,"direction":"<LEFT|CENTER|RIGHT|UNKNOWN>","proximity":"<FAR|NEAR|AT|UNKNOWN>","passed":<true|false>,"destination_dominant":<true|false>,"u":<int 0-1000, or null only when visible=false>,"v":<int 0-1000, or null only when visible=false>,"confidence":<float 0-1>},"completed":<true|false>,"completion_confidence":<float 0-1>,"error_mode":"<NONE|WALL_STUCK|TURN_OSCILLATION|IN_PLACE_SPIN|GET_NOWHERE>","error_confidence":<float 0-1>,"final_target":{"visible":<true|false>,"proximity":"<FAR|NEAR|AT|UNKNOWN>","confidence":<float 0-1>},"evidence":"<at most 25 words>"}
+Value rules: whenever landmark.visible is true, u and v are REQUIRED and give
+the landmark's pixel in the CURRENT image on a 0..1000 grid (u=0 left edge,
+u=1000 right edge, v=0 top, v=1000 bottom); null is allowed only with
+visible=false. Every confidence is your own probability that the accompanying
+judgement is right: about 0.9 when the frames make it obvious, about 0.5 when
+uncertain, about 0.2 when guessing. Report a real value for every judgement,
+including a confident "not completed"; never write 0.0 as a default. Keep
+evidence to one short clause with no line breaks, no indentation and no
+markdown fences."""
 
 
 SCENE_SYSTEM_PROMPT = """You are the temporal scene observer for indoor
@@ -249,17 +268,24 @@ always means completed=false; never reconstruct an unseen crossing.
 
 For a non-doorway subgoal use door_state=NOT_APPLICABLE and
 door_camera_side=NOT_APPLICABLE, door_transition=NOT_APPLICABLE, and
-current_room_side=NOT_APPLICABLE. Track only that subgoal's named landmark or
-final destination. Seeing a target at a distance is not reaching it. On the
-final subgoal, final_target reports visible and FAR/NEAR/AT; otherwise it must
-be invisible/UNKNOWN. For a final subgoal, completed=true requires
-final_target.visible=true and proximity=AT; NEAR still means continue moving.
+current_room_side=NOT_APPLICABLE. landmark tracks only the active subgoal's
+named landmark. Seeing a target at a distance is not reaching it.
+final_target refers to the route's FINAL DESTINATION named in the input, on
+every stage, not to the active subgoal's landmark: report visible with
+FAR/NEAR/AT whenever that destination is actually in view, otherwise
+invisible/UNKNOWN. A look-alike (another bathroom, another door) that the
+instructed route has not led to yet is FAR at most. For a final subgoal,
+completed=true requires final_target.visible=true and proximity=AT; NEAR
+still means continue moving.
 A final-target proximity must use these visual meanings consistently:
 - FAR: the target is distant or is only seen through an opening;
 - NEAR: the camera is in the destination room and approaching, but the target
   boundary is not yet in the immediate foreground;
 - AT: the target edge, rail, or surrounding floor boundary is in the immediate
-  foreground and the camera is directly beside it.
+  foreground and the camera is directly beside it. For a positional
+  destination such as "just inside the doorway" or "in front of the sink",
+  AT means the camera stands at that position: the named doorway's jambs are
+  beside or just behind the camera and the destination room is ahead.
 Never return completed=true together with FAR or NEAR. If the evidence says
 "reached", "directly beside", or "in the foreground", use AT only when that
 claim is visibly true; otherwise keep completed=false and use FAR or NEAR.
@@ -280,8 +306,19 @@ direction and u/v always refer to the current image. Evidence must identify
 what structural landmark is visible and describe the temporal change; when
 completion is uncertain return completed=false.
 
-Return only this exact compact JSON shape:
-{"door_state":"NOT_VISIBLE","door_camera_side":"UNKNOWN","door_transition":"NONE","current_room_side":"AMBIGUOUS","landmark":{"visible":false,"direction":"UNKNOWN","proximity":"UNKNOWN","passed":false,"destination_dominant":false,"u":null,"v":null,"confidence":0.0},"completed":false,"completion_confidence":0.0,"error_mode":"NONE","error_confidence":0.0,"final_target":{"visible":false,"proximity":"UNKNOWN","confidence":0.0},"evidence":"brief frame-grounded reason"}"""
+Reply with exactly one single-line JSON object with these keys and value
+types. Angle brackets are values you fill in from the frames; they are types,
+never placeholders to copy:
+{"door_state":"<NOT_APPLICABLE|NOT_VISIBLE|APPROACHING|AT_THRESHOLD|CROSSING|CROSSED>","door_camera_side":"<NOT_APPLICABLE|UNKNOWN|BEFORE_DOOR|AT_DOOR|AFTER_DOOR>","door_transition":"<NOT_APPLICABLE|NONE|TURNED_AWAY|APPROACHED|PASSED_THROUGH>","current_room_side":"<NOT_APPLICABLE|ORIGINAL_SIDE|FAR_SIDE|AMBIGUOUS>","landmark":{"visible":<true|false>,"direction":"<LEFT|CENTER|RIGHT|UNKNOWN>","proximity":"<FAR|NEAR|AT|UNKNOWN>","passed":<true|false>,"destination_dominant":<true|false>,"u":<int 0-1000, or null only when visible=false>,"v":<int 0-1000, or null only when visible=false>,"confidence":<float 0-1>},"completed":<true|false>,"completion_confidence":<float 0-1>,"error_mode":"<NONE|WALL_STUCK|TURN_OSCILLATION|IN_PLACE_SPIN|GET_NOWHERE>","error_confidence":<float 0-1>,"final_target":{"visible":<true|false>,"proximity":"<FAR|NEAR|AT|UNKNOWN>","confidence":<float 0-1>},"evidence":"<at most 25 words>"}
+Value rules: whenever landmark.visible is true, u and v are REQUIRED and give
+the landmark's pixel in the CURRENT image on a 0..1000 grid (u=0 left edge,
+u=1000 right edge, v=0 top, v=1000 bottom); null is allowed only with
+visible=false. Every confidence is your own probability that the accompanying
+judgement is right: about 0.9 when the frames make it obvious, about 0.5 when
+uncertain, about 0.2 when guessing. Report a real value for every judgement,
+including a confident "not completed"; never write 0.0 as a default. Keep
+evidence to one short clause with no line breaks, no indentation and no
+markdown fences."""
 
 
 class TemporalCaptioner:
@@ -306,6 +343,10 @@ class TemporalCaptioner:
         self.last_raw_response: Optional[str] = None
         self.last_failed_raw_response: Optional[str] = None
         self.last_preview_raw_response: Optional[str] = None
+        # Set by ``_json_value`` when the reply only parsed after truncation
+        # repair, so a schema failure on that object is reported as the
+        # truncation it is rather than as a wrong schema.
+        self._last_reply_truncated = False
         # A bounded identity cache avoids re-resizing and re-encoding the same
         # retained temporal frames on every subsequent step. The source object
         # is kept beside the bytes so a recycled id can never hit stale data.
@@ -336,8 +377,12 @@ class TemporalCaptioner:
             )
             raw_response = str(response)
             self.last_raw_response = raw_response
-            parsed = _SceneModelResult.model_validate(
-                self._json_value(response)
+            # A schema mismatch is the model's output problem, not an
+            # inference failure: keep it a TemporalOutputError so the failed
+            # text is remembered and the two causes stay distinguishable.
+            parsed = self._validate_reply(
+                _SceneModelResult,
+                self._json_value(response),
             )
             result = self._scene_result(
                 request,
@@ -555,6 +600,14 @@ class TemporalCaptioner:
                 "four door fields."
             )
         )
+        final = request.final_subgoal
+        destination = (
+            f"Final destination of the whole route (for final_target only): "
+            f"{final.description}. Destination proof: "
+            f"{final.completion_criteria}\n"
+            if final is not None and not request.is_final_subgoal
+            else ""
+        )
         content: list[Any] = [
             f"Active subgoal: {request.subgoal.description}\n"
             f"Completion criterion: {request.subgoal.completion_criteria}\n"
@@ -562,6 +615,7 @@ class TemporalCaptioner:
             f"{'DOORWAY' if doorway_stage else 'NON_DOORWAY'}\n"
             f"Door output contract: {door_contract}\n"
             f"Is final subgoal: {request.is_final_subgoal}\n"
+            f"{destination}"
             f"Frames: {len(request.frames)}, oldest first. The image after "
             f"the final metadata line is the CURRENT observation."
         ]
@@ -633,7 +687,9 @@ class TemporalCaptioner:
             direction = "LEFT" if u < 400 else "RIGHT" if u > 600 else "CENTER"
 
         target = parsed.final_target
-        target_visible = bool(target.visible) and request.is_final_subgoal
+        # Reported on every stage now, so a verified destination can end a
+        # plan whose intermediate stage is stuck.
+        target_visible = bool(target.visible)
         target_proximity = target.proximity.upper()
         if target_proximity not in {"FAR", "NEAR", "AT", "UNKNOWN"}:
             target_proximity = "UNKNOWN"
@@ -792,7 +848,7 @@ class TemporalCaptioner:
     def _parse_single(self, response: Any) -> _ModelResult:
         value = self._json_value(response)
         if set(value) == {"completed"}:
-            completion = self._validate_model(
+            completion = self._validate_reply(
                 _CompletionModelResult,
                 value,
             )
@@ -801,22 +857,19 @@ class TemporalCaptioner:
                 error=False,
                 error_mode="NONE",
             )
-        try:
-            result = _ModelResult.model_validate(value)
-        except Exception as exc:
-            raise TemporalOutputError("model returned the wrong schema") from exc
+        result = self._validate_reply(_ModelResult, value)
         if result.error != (result.error_mode != "NONE"):
             raise TemporalOutputError("error and error_mode disagree")
         return result
 
     def _parse_completion(self, response: Any) -> _CompletionModelResult:
-        return self._validate_model(
+        return self._validate_reply(
             _CompletionModelResult,
             self._json_value(response),
         )
 
     def _parse_error(self, response: Any) -> _ErrorModelResult:
-        result = self._validate_model(
+        result = self._validate_reply(
             _ErrorModelResult,
             self._json_value(response),
         )
@@ -835,8 +888,22 @@ class TemporalCaptioner:
         except Exception as exc:
             raise TemporalOutputError("model returned the wrong schema") from exc
 
-    @staticmethod
-    def _json_value(response: Any) -> Mapping[str, Any]:
+    def _validate_reply(
+        self, model: type[BaseModel], value: Mapping[str, Any]
+    ) -> Any:
+        """Validate a reply, blaming truncation when repair recovered it."""
+        try:
+            return self._validate_model(model, value)
+        except TemporalOutputError as exc:
+            if self._last_reply_truncated:
+                raise TemporalOutputError(
+                    "model returned invalid JSON (truncated reply lost "
+                    "required fields)"
+                ) from exc
+            raise
+
+    def _json_value(self, response: Any) -> Mapping[str, Any]:
+        self._last_reply_truncated = False
         if isinstance(response, Mapping):
             return response
         text = str(response or "").strip()
@@ -846,15 +913,78 @@ class TemporalCaptioner:
             value = json.loads(text)
         except json.JSONDecodeError:
             start, end = text.find("{"), text.rfind("}")
-            if start < 0 or end <= start:
+            if start < 0:
                 raise TemporalOutputError("model returned invalid JSON")
-            try:
-                value = json.loads(text[start : end + 1])
-            except json.JSONDecodeError as exc:
-                raise TemporalOutputError("model returned invalid JSON") from exc
+            value = None
+            if end > start:
+                try:
+                    value = json.loads(text[start : end + 1])
+                except json.JSONDecodeError:
+                    value = None
+            if value is None:
+                # The model pretty-prints the object often enough that the
+                # closing brace falls past the token budget. The structured
+                # fields come first and the free-text evidence last, so the
+                # truncated prefix usually still carries every decision.
+                value = self._repair_truncated_json(text[start:])
+                self._last_reply_truncated = value is not None
+            if value is None:
+                raise TemporalOutputError("model returned invalid JSON")
         if not isinstance(value, Mapping):
             raise TemporalOutputError("model returned the wrong schema")
         return value
+
+    @staticmethod
+    def _repair_truncated_json(body: str) -> Optional[Mapping[str, Any]]:
+        """Close an object whose tail was cut off by the token budget.
+
+        Tries the full prefix first (a cut inside the evidence string), then
+        backs up to each earlier top-level comma (a cut inside a key or a
+        number) and closes every open string and bracket. Returns None when
+        no prefix parses to an object.
+        """
+        cuts = [len(body)]
+        in_string = escaped = False
+        for index, char in enumerate(body):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == ",":
+                cuts.append(index)
+        for cut in sorted(set(cuts), reverse=True)[:64]:
+            prefix = body[:cut]
+            stack: list[str] = []
+            in_string = escaped = False
+            for char in prefix:
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        in_string = False
+                elif char == '"':
+                    in_string = True
+                elif char in "{[":
+                    stack.append("}" if char == "{" else "]")
+                elif char in "}]" and stack:
+                    stack.pop()
+            candidate = prefix + ('"' if in_string else "")
+            candidate = re.sub(r"[,:\s]+$", "", candidate)
+            candidate += "".join(reversed(stack))
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, Mapping):
+                return value
+        return None
 
     @staticmethod
     def _validate_window(
@@ -980,9 +1110,11 @@ class TemporalCaptioner:
                 raw = str(response)
                 return self._parse_error(response), raw
             except TemporalOutputError as exc:
-                # Retry only malformed/truncated JSON. A structurally wrong
-                # response cannot be repaired by asking the identical schema
-                # again and must remain visible to callers immediately.
+                # Retry only malformed/truncated JSON (a repaired truncation
+                # that lost required fields still counts as truncated). A
+                # structurally wrong response cannot be repaired by asking
+                # the identical schema again and must remain visible to
+                # callers immediately.
                 if "invalid JSON" not in str(exc) or attempt == 1:
                     self._remember_failed_response("error", response)
                     raise

@@ -265,10 +265,17 @@ class SceneAnalysisRequest:
     frames: tuple[TemporalFrameInput, ...]
     is_final_subgoal: bool = False
     next_subgoal: Subgoal | None = None
+    # The route's last stage, supplied on every stage so the observer can
+    # report the final destination whenever it is in view.
+    final_subgoal: Subgoal | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.subgoal, Subgoal):
             raise TemporalInputError("subgoal must be a Subgoal")
+        if self.final_subgoal is not None and not isinstance(
+            self.final_subgoal, Subgoal
+        ):
+            raise TemporalInputError("final_subgoal must be a Subgoal or None")
         frames = tuple(self.frames)
         object.__setattr__(self, "frames", frames)
         if not 1 <= len(frames) <= 16:

@@ -47,8 +47,12 @@ other target, put the pixel on visible open floor that leads directly toward
 it. Never report a wall, furniture, a window, a tiled panel, or the far room
 seen through the opening as the pixel.
 
-Reply only with one exact JSON object:
-{"view_index":integer,"u":integer,"v":integer,"confidence":0.0,"evidence":"brief visual reason naming where the doorway sits in the chosen view"}"""
+Reply with exactly one single-line JSON object; angle brackets are values you
+fill in from the views, never placeholders to copy:
+{"view_index":<int>,"u":<int 0-1000>,"v":<int 0-1000>,"confidence":<float 0-1>,"evidence":"<at most 20 words naming where the target sits in the chosen view>"}
+confidence is your own probability that the chosen view and pixel are right:
+about 0.9 when obvious, 0.5 when two views compete, 0.2 when guessing; never
+0.0 as a default. No line breaks, indentation or markdown fences."""
 
 
 class PreviewSelectionOutput(BaseModel):
