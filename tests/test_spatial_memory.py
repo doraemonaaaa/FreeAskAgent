@@ -261,3 +261,19 @@ def test_target_behind_the_agent_survives_the_turn_in_place():
     for step in range(20, 27):
         status = target.update(step=step, position_xz=(0.0, 0.0), yaw_deg=180.0)
     assert status == "stagnant"
+
+
+def test_visual_map_is_a_crisp_window_around_the_agent():
+    memory = SpatialMemory(camera_height_m=CAMERA_HEIGHT)
+    blank = memory.visual_map(size_px=120)
+    assert blank.shape == (120, 120, 3) and int(blank[0, 0, 0]) == 128  # nothing known yet
+    memory.observe(step=0, depth_m=_room_depth(wall_m=3.0), intrinsics=INTRINSICS,
+                   camera_to_world=_pose(0.0, 0.0))
+    memory.commit_target((0.0, 0.0, -2.0), kind="som", subgoal_id="1")
+    image = memory.visual_map(window_m=8.0, size_px=160, extra_points=[(1.0, 0.0, -1.0)])
+    assert image.shape == (160, 160, 3)
+    colours = {tuple(c) for c in image.reshape(-1, 3)}
+    assert (255, 255, 255) in colours      # free floor ahead
+    assert (255, 140, 0) in colours        # the agent
+    assert (230, 30, 30) in colours        # committed target
+    assert (255, 220, 0) in colours        # the extra (candidate) point

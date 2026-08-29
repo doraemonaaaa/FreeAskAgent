@@ -403,6 +403,67 @@ class SpatialMemory:
             target.age(self.step),
         )
 
+    def visual_map(
+        self,
+        *,
+        window_m: float = 12.0,
+        size_px: int = 480,
+        extra_points: Optional[list[tuple[float, float, float]]] = None,
+    ) -> np.ndarray:
+        """The agent's own map around it, scaled for a video panel.
+
+        A ``window_m`` square centred on the agent, cropped from
+        :meth:`render_topdown` (unknown grey, free white, occupied black,
+        trail blue, landmarks green, committed target red, agent orange) with
+        ``extra_points`` (e.g. set-of-mark candidates) in yellow, then scaled
+        with nearest-neighbour so cells stay crisp.
+        """
+        from PIL import Image
+
+        if self.position is None or self.grid.origin_xz is None:
+            return np.full((size_px, size_px, 3), 128, dtype=np.uint8)
+        image = self.render_topdown(px_per_cell=1)
+        for point in extra_points or ():
+            try:
+                row, col = self.grid.world_to_cell(float(point[0]), float(point[2]))
+            except Exception:
+                continue
+            image[max(row - 1, 0): row + 2, max(col - 1, 0): col + 2] = (255, 220, 0)
+        # Heading tick: a short orange line from the agent in its facing
+        # direction (forward = (sin yaw, -cos yaw) on the x/z plane).
+        yaw = math.radians(self.yaw_deg)
+        row, col = self.grid.world_to_cell(*self.position_xz)
+        for k in range(1, 6):
+            rr = int(round(row + k * (-math.cos(yaw))))
+            cc = int(round(col + k * math.sin(yaw)))
+            if self.grid.inside(rr, cc):
+                image[rr, cc] = (255, 140, 0)
+        half = int(round(window_m / 2 / self.grid.resolution_m))
+        r0, c0 = row - half, col - half
+        crop = np.full((2 * half, 2 * half, 3), 128, dtype=np.uint8)
+        rs, cs = slice(max(r0, 0), min(r0 + 2 * half, self.grid.cells)), slice(max(c0, 0), min(c0 + 2 * half, self.grid.cells))
+        crop[rs.start - r0: rs.stop - r0, cs.start - c0: cs.stop - c0] = image[rs, cs]
+        panel = Image.fromarray(crop).resize((size_px, size_px), Image.Resampling.NEAREST)
+        # Legend strip along the bottom.
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(panel)
+        try:
+            font = ImageFont.load_default(size=max(10, size_px // 40))
+        except TypeError:
+            font = ImageFont.load_default()
+        legend = [((255, 140, 0), "agent"), ((40, 90, 255), "trail"), ((0, 170, 0), "landmark"),
+                  ((230, 30, 30), "target"), ((255, 220, 0), "candidate"), ((0, 0, 0), "occupied"),
+                  ((255, 255, 255), "free"), ((128, 128, 128), "unknown")]
+        y = size_px - max(14, size_px // 30)
+        x = 4
+        draw.rectangle((0, y - 3, size_px, size_px), fill=(60, 60, 60))
+        for colour, name in legend:
+            draw.rectangle((x, y, x + 9, y + 9), fill=colour, outline=(200, 200, 200))
+            draw.text((x + 12, y - 2), name, fill=(240, 240, 240), font=font)
+            x += 12 + int(draw.textlength(name, font=font)) + 8
+        draw.text((4, 2), f"{window_m:.0f} m window, grid {self.grid.resolution_m:.2f} m", fill=(240, 240, 240), font=font)
+        return np.asarray(panel)
+
     def render_topdown(self, *, px_per_cell: int = 2) -> np.ndarray:
         """Grid image with the trail (blue), landmarks (green), target (red)."""
         image = self.grid.render(px_per_cell=px_per_cell)

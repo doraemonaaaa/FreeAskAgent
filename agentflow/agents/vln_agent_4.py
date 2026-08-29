@@ -146,6 +146,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         ).strip().lower() not in ("0", "false", "off", "no")
         self.last_som_candidates: list[dict[str, Any]] = []
         self.last_som_choice: Optional[str] = None
+        # The marker-annotated frame the model was shown this step, for video.
+        self.last_som_image: Optional[np.ndarray] = None
         self.last_som_raw_response: Optional[str] = None
         self.last_som_error: Optional[str] = None
         self.last_spatial_summary: str = "sp=-"
@@ -313,6 +315,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # into later model-selected waypoints.
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
+        self.last_som_image = None
         # Preview views belong to the step that asked for them. Holding them
         # past it would keep several images alive for the rest of the episode
         # and let a later reader mistake them for this step's.
@@ -1569,6 +1572,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_som_choice = None
         self.last_som_candidates = []
         self.last_som_error = None
+        self.last_som_image = None
         if not self.use_som or not self._spatial_stage_eligible(current):
             return None
         # The same recovery evaluation the pixel path runs; an active
@@ -1623,6 +1627,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             for c in candidates
         ]
         annotated = annotate_image(image, candidates)
+        self.last_som_image = annotated
         listing = describe_candidates(candidates)
         text = "\n".join((
             self.task_memory.current_subgoal_context() if self.task_memory else "",
