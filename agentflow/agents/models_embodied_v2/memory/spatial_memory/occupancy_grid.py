@@ -349,6 +349,41 @@ class OccupancyGrid:
             return None, None
         return best[1], best[2]
 
+    def snap_to_clear_free(
+        self,
+        x: float,
+        z: float,
+        *,
+        clearance_m: float = 0.35,
+        radius_m: float = 1.0,
+    ) -> Optional[tuple[float, float]]:
+        """Nearest known-FREE cell at least ``clearance_m`` from OCCUPIED.
+
+        A point at the very edge of the visible floor is usually inside the
+        wall's clearance band, where the simulator's navmesh is not walkable
+        and the follower can only turn in place. Returns None when no such
+        cell exists within ``radius_m``.
+        """
+        if self.origin_xz is None:
+            return None
+        state = self.state_map()
+        blocked = self._blocked_map(state, clearance_m)
+        ok = (state == FREE) & ~blocked
+        row, col = self.world_to_cell(x, z)
+        r = int(math.ceil(radius_m / self.resolution_m))
+        best = None
+        for dr in range(-r, r + 1):
+            for dc in range(-r, r + 1):
+                rr, cc = row + dr, col + dc
+                if not self.inside(rr, cc) or not ok[rr, cc]:
+                    continue
+                d = dr * dr + dc * dc
+                if best is None or d < best[0]:
+                    best = (d, rr, cc)
+        if best is None:
+            return None
+        return self.cell_to_world(best[1], best[2])
+
     def render(self, *, px_per_cell: int = 1) -> np.ndarray:
         """RGB image: unknown grey, free white, occupied black."""
         state = self.state_map()

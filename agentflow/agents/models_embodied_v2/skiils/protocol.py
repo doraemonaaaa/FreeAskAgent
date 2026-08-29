@@ -83,6 +83,37 @@ SPATIAL_TARGET_MAX_AGE_STEPS = 12
 SPATIAL_TARGET_STAGNATION_STEPS = 6
 SPATIAL_TARGET_MIN_COMMIT_M = 0.6
 SPATIAL_LOOKAHEAD_M = 1.5
+# Set-of-mark waypoint selection (memory/spatial_memory/candidates.py): the
+# map proposes numbered floor points, the model picks one. Enabled with
+# Spatial Memory unless VLN_SOM=0.
+SOM_MAX_CANDIDATES = 5
+SOM_TARGET_MAX_AGE_STEPS = 24
+# A far marker is walked only this far before the model is asked again, so
+# a stage that should have turned or stopped half-way is not overshot.
+SOM_MAX_TARGET_DISTANCE_M = 3.0
+SOM_TURN_DEG = 45
+
+SOM_PROMPT = """You are choosing where an indoor navigation agent walks next.
+The image is the agent's current view with numbered markers drawn on
+reachable floor points; the text lists each marker's distance and direction
+and what lies there (open floor, the edge of the explored map, or the active
+subgoal's landmark located by the scene observer). Letters L, R and B, when
+listed, are places outside the current view that the map has not explored
+yet, reached by turning left, right or around.
+
+Pick the option that best continues the ACTIVE subgoal within the full route
+instruction:
+- prefer a marker on the route toward the named landmark, doorway or room;
+- in a corridor or hallway stage keep the corridor, do not enter side rooms;
+- choose L, R or B only when no marker in view can lead where the route
+  goes (a blind corner, a turn the instruction asks for, a dead end);
+- never choose a marker the instruction tells you to move away from.
+
+Reply with exactly one single-line JSON object; angle brackets are values you
+fill in, not placeholders to copy:
+{"choice":"<marker number, or L, R, B>","confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+confidence is your own probability that this choice follows the route: about
+0.9 when obvious, 0.5 when two options compete, 0.2 when guessing."""
 # A doorway completion is normally released by geometry (the camera reached
 # the localized doorway) or by the model having reported the approach. When
 # neither happens -- the doorway point was mislocalized, or the model jumped

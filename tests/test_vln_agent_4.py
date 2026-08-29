@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from agentflow.agents.vln_agent_4 import VLNAgent
 from agentflow.agents.models_embodied_v2.data_models import PreviewView
@@ -999,3 +1000,122 @@ def test_spatial_target_is_walked_to_then_released_and_final_stage_keeps_the_mod
         act(z)
     assert len([l for l, _, _ in engine.calls if l == "waypoint"]) == calls_before + 3
     assert agent.spatial_memory.target is None
+
+
+def test_spatial_memory_switch_keeps_the_model_in_the_loop(monkeypatch):
+    monkeypatch.setenv("VLN_SPATIAL_MEMORY", "0")
+    engine = TwoStageWalkEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    assert agent.use_spatial_memory is False
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((40.0, 0.0, 64.0), (0.0, 40.0, 48.0), (0.0, 0.0, 1.0)))
+    depth = _room_depth_for_agent()
+    for step in range(3):
+        pose = np.eye(4)
+        pose[1, 3] = 1.25
+        pose[2, 3] = -0.25 * step
+        agent.act(np.zeros((96, 128, 3), dtype=np.uint8), depth, instruction, intrinsics, pose)
+    assert agent.spatial_memory.target is None
+    assert agent.last_spatial_summary == "sp=off"
+    assert [l for l, _, _ in engine.calls].count("waypoint") == 3
+
+
+class SetOfMarkEngine(TwoStageWalkEngine):
+    """Answers the set-of-mark question with a fixed marker label."""
+
+    def __init__(self, choice="2"):
+        super().__init__()
+        self.choice = choice
+        self.som_prompts = []
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are choosing where an indoor navigation agent walks next"):
+            self.calls.append(("som", content, kwargs))
+            self.som_prompts.append(content[0])
+            return ('{"choice":"%s","confidence":0.8,"evidence":"corridor continues there"}' % self.choice)
+        return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+
+def _floor_mask_for_agent(height=96, cy=48.0):
+    vs = np.arange(height, dtype=np.float64)[:, None]
+    return np.broadcast_to(vs - cy > 0, (height, 128)).copy()
+
+
+def test_set_of_mark_choice_becomes_the_committed_target():
+    engine = SetOfMarkEngine(choice="2")
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    assert agent.use_som
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((40.0, 0.0, 64.0), (0.0, 40.0, 48.0), (0.0, 0.0, 1.0)))
+    depth = _room_depth_for_agent()
+    pose = np.eye(4)
+    pose[1, 3] = 1.25
+    decision = agent.act(np.zeros((96, 128, 3), dtype=np.uint8), depth, instruction, intrinsics, pose)
+
+    labels = [label for label, _, _ in engine.calls]
+    assert labels == ["plan", "scene", "som"]  # no pixel-proposal call
+    assert agent.last_som_choice == "2"
+    chosen = next(c for c in agent.last_som_candidates if c["label"] == "2")
+    target = agent.spatial_memory.target
+    assert target is not None and target.kind == "som"
+    # The target lies on the ray toward marker 2, at most 3 m out (a far
+    # marker is walked part-way before the model is asked again), snapped
+    # onto free floor within a couple of grid cells.
+    to_marker = np.array(chosen["world_xyz"])[[0, 2]]
+    to_target = np.array(target.world_xyz)[[0, 2]]
+    assert np.linalg.norm(to_target) <= 3.0 + 0.35
+    assert np.dot(to_marker, to_target) / (np.linalg.norm(to_marker) * np.linalg.norm(to_target)) > 0.98
+    assert decision.point is not None and decision.stop is False
+    assert "set-of-mark: model chose marker 2" in agent.last_waypoint_guard_reason
+    prompt = engine.som_prompts[0]
+    assert "Options:" in prompt and "[1]" in prompt and "Full route instruction" in prompt
+    # The image sent carries the markers (PNG bytes), not the raw frame.
+    assert isinstance(engine.calls[-1][1][1], bytes) and engine.calls[-1][1][1][:4] == b"\x89PNG"
+
+
+def test_set_of_mark_falls_back_to_pixel_path_on_unusable_replies():
+    engine = SetOfMarkEngine(choice="Z")  # never a listed label
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((40.0, 0.0, 64.0), (0.0, 40.0, 48.0), (0.0, 0.0, 1.0)))
+    pose = np.eye(4)
+    pose[1, 3] = 1.25
+    agent.act(np.zeros((96, 128, 3), dtype=np.uint8), _room_depth_for_agent(), instruction, intrinsics, pose)
+    labels = [label for label, _, _ in engine.calls]
+    assert labels == ["plan", "scene", "som", "som", "waypoint"]
+    assert agent.last_som_choice is None and "not a listed label" in agent.last_som_error
+    assert agent.spatial_memory.target is not None and agent.spatial_memory.target.kind == "model_waypoint"
+
+
+class SoMWithLandmarkEngine(SetOfMarkEngine):
+    """Scene observer locates the stage landmark; SoM must not be asked."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are the temporal scene observer"):
+            self.calls.append(("scene", content, kwargs))
+            # Landmark located at (760, 640); the captioner forces the door
+            # fields to NOT_APPLICABLE for this non-doorway stage.
+            return SCENE_DOOR_VISIBLE_RIGHT
+        return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+
+def test_located_landmark_is_walked_to_and_locked_instead_of_asking_set_of_mark():
+    engine = SoMWithLandmarkEngine(choice="1")
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Walk forward to the sofa, then walk forward to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((40.0, 0.0, 64.0), (0.0, 40.0, 48.0), (0.0, 0.0, 1.0)))
+    pose = np.eye(4)
+    pose[1, 3] = 1.25
+    decision = agent.act(np.zeros((96, 128, 3), dtype=np.uint8), _room_depth_for_agent(), instruction, intrinsics, pose)
+    labels = [label for label, _, _ in engine.calls]
+    assert labels == ["plan", "scene"]  # neither set-of-mark nor the pixel path
+    target = agent.spatial_memory.target
+    assert target is not None and target.kind == "landmark"
+    assert agent._doorway_waypoint is not None  # locked for the completion judge
+    assert agent._doorway_waypoint.world_xyz == pytest.approx(target.world_xyz, abs=1e-6)
+    assert decision.point is not None
+    assert "walking to the floor beneath the located landmark" in agent.last_waypoint_guard_reason

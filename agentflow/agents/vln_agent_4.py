@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
+import os
 import re
 import time
 from typing import Any, Deque, Optional, Sequence
@@ -27,7 +28,15 @@ from agentflow.agents.models_embodied_v2.data_models import (
 )
 
 from agentflow.agents.models_embodied_v2.memory.task_memory import TaskMemory
-from agentflow.agents.models_embodied_v2.memory.spatial_memory import SpatialMemory
+from agentflow.agents.models_embodied_v2.memory.spatial_memory import (
+    SpatialMemory,
+    annotate_image,
+    describe_candidates,
+    generate_candidates,
+)
+from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import (
+    encode_png,
+)
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
     BEHAVIOR_HISTORY_SIZE,
@@ -49,9 +58,16 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     RECOVERY_LATERAL_DISTANCE_M,
     SUBGOAL_GENERATION_ATTEMPTS,
     STRUCTURED_VLM_MAX_TOKENS,
+    VLM_IMAGE_MAX_PIXELS,
+    VLM_IMAGE_MIN_PIXELS,
     CAPTIONER_ANALYSIS_INTERVAL_STEPS,
     CAPTIONER_MAX_TOKENS,
     SPATIAL_LOOKAHEAD_M,
+    SOM_MAX_CANDIDATES,
+    SOM_MAX_TARGET_DISTANCE_M,
+    SOM_PROMPT,
+    SOM_TARGET_MAX_AGE_STEPS,
+    SOM_TURN_DEG,
     SPATIAL_TARGET_MAX_AGE_STEPS,
     SPATIAL_TARGET_MIN_COMMIT_M,
     SPATIAL_TARGET_STAGNATION_STEPS,
@@ -90,6 +106,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         max_floor_offset_m=0.30,
         task_memory=None,
         temporal_memory=None,
+        use_spatial_memory: Optional[bool] = None,
         **kwargs,
     ) -> None:
         # The actor owns observation validation, walkable-pixel snapping, and
@@ -115,6 +132,22 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             camera_height_m=camera_height_m,
             lookahead_m=SPATIAL_LOOKAHEAD_M,
         )
+        # ``VLN_SPATIAL_MEMORY=0`` runs the identical agent without the map
+        # in the loop, for A/B evaluation.
+        if use_spatial_memory is None:
+            use_spatial_memory = os.environ.get(
+                "VLN_SPATIAL_MEMORY", "1"
+            ).strip().lower() not in ("0", "false", "off", "no")
+        self.use_spatial_memory = bool(use_spatial_memory)
+        # Set-of-mark selection rides on Spatial Memory; VLN_SOM=0 keeps the
+        # pixel-proposal path for A/B comparison.
+        self.use_som = self.use_spatial_memory and os.environ.get(
+            "VLN_SOM", "1"
+        ).strip().lower() not in ("0", "false", "off", "no")
+        self.last_som_candidates: list[dict[str, Any]] = []
+        self.last_som_choice: Optional[str] = None
+        self.last_som_raw_response: Optional[str] = None
+        self.last_som_error: Optional[str] = None
         self.last_spatial_summary: str = "sp=-"
         self.last_spatial_error: Optional[str] = None
 
@@ -227,6 +260,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._scene_analysis_subgoal_id: Optional[str] = None
         self._spatial_step = -1
         self._current_depth_m: Optional[np.ndarray] = None
+        self._current_floor_mask: Optional[np.ndarray] = None
+        self._oracle_goal_xyz: Optional[tuple[float, float, float]] = None
         self._judge_target_point: Optional[NavigationPoint] = None
         self._judge_target_subgoal_id: Optional[str] = None
         self._judge_target_tolerance_m = COMMITTED_TARGET_REACHED_M
@@ -248,9 +283,30 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         normalized_depth: bool = False,
         depth_min_m: Optional[float] = None,
         depth_max_m: Optional[float] = None,
+        navigable_window: Optional[dict[str, Any]] = None,
+        oracle_goal_xyz: Optional[Sequence[float]] = None,
     ) -> NavigationDecision:
-        """Run one step while retaining state transitions for debug output."""
+        """Run one step while retaining state transitions for debug output.
+
+        ``navigable_window`` is the controller's traversability around the
+        agent (origin_xz, resolution_m, mask); Spatial Memory uses it to keep
+        targets and candidates where the follower can actually go.
+        """
         act_started = time.perf_counter()
+        # Diagnostic upper bound for set-of-mark: never set in evaluation.
+        self._oracle_goal_xyz = (
+            tuple(float(v) for v in oracle_goal_xyz)
+            if oracle_goal_xyz is not None else None
+        )
+        if navigable_window is not None and self.use_spatial_memory:
+            try:
+                self.spatial_memory.set_traversability(
+                    origin_xz=tuple(navigable_window["origin_xz"]),
+                    resolution_m=float(navigable_window["resolution_m"]),
+                    mask=np.asarray(navigable_window["mask"], dtype=bool),
+                )
+            except Exception as exc:
+                self.last_spatial_error = f"{type(exc).__name__}: {exc}"
         # These flags describe only the waypoint selected during this call.
         # A recovery selection may set one of them below; clear both before
         # delegating to the RGB-D layer so a completed recovery cannot leak
@@ -785,6 +841,20 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         )
         timings["depth_ms"] = (time.perf_counter() - depth_started) * 1000
 
+        som_started = time.perf_counter()
+        som = self._som_decision(
+            current,
+            image=image,
+            depth_m=depth_m,
+            intrinsics=intrinsics,
+            camera_to_world=camera_to_world,
+        )
+        if som is not None:
+            timings["select_pixel_ms"] = (time.perf_counter() - som_started) * 1000
+            timings["waypoint_ms"] = 0.0
+            self._record_timings(timings, started)
+            return som
+
         # Read Task Memory only after Temporal Memory has published this
         # step's analysis, so waypoint selection steers by the subgoal this
         # step established rather than the previous step's.
@@ -1311,7 +1381,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         """Fuse this step's depth into the map; never breaks the step."""
         self.last_spatial_error = None
         depth_m = self._current_depth_m
-        if depth_m is None:
+        if depth_m is None or not self.use_spatial_memory:
+            self.last_spatial_summary = "sp=off" if not self.use_spatial_memory else "sp=-"
             return
         try:
             calibration = (
@@ -1326,6 +1397,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                     calibration,
                     np.asarray(camera_to_world, dtype=np.float64),
                 )
+            self._current_floor_mask = floor_mask
             self.spatial_memory.observe(
                 step=self._spatial_step,
                 depth_m=depth_m,
@@ -1357,7 +1429,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         pixel = self.last_landmark_pixel
         depth_m = self._current_depth_m
         if (
-            landmark is None
+            not self.use_spatial_memory
+            or landmark is None
             or pixel is None
             or not landmark.visible
             or depth_m is None
@@ -1414,6 +1487,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     ) -> Optional[NavigationDecision]:
         """Keep walking to the committed target; skip the waypoint VLM."""
         memory = self.spatial_memory
+        if not self.use_spatial_memory:
+            return None
         if not self._spatial_stage_eligible(current):
             if memory.target is not None:
                 memory.release_target("stage not eligible")
@@ -1476,6 +1551,266 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             action_mode="EXECUTION",
         )
 
+    def _som_decision(
+        self,
+        current: Optional[Subgoal],
+        *,
+        image: np.ndarray,
+        depth_m: np.ndarray,
+        intrinsics: Any,
+        camera_to_world: Any,
+    ) -> Optional[NavigationDecision]:
+        """Let the model choose among map-generated markers, then commit.
+
+        Returns None to fall back to the pixel-proposal path: SoM is off,
+        the stage is a turn or the final approach, recovery is active, no
+        candidate could be generated, or the reply was unusable twice.
+        """
+        self.last_som_choice = None
+        self.last_som_candidates = []
+        self.last_som_error = None
+        if not self.use_som or not self._spatial_stage_eligible(current):
+            return None
+        # The same recovery evaluation the pixel path runs; an active
+        # recovery takes the deterministic path and must not be voted twice.
+        if self._recovery_mode_for_step() is not None:
+            return None
+        located = self._located_landmark_decision(
+            current,
+            image_shape=image.shape[:2],
+            depth_m=depth_m,
+            intrinsics=intrinsics,
+            camera_to_world=camera_to_world,
+        )
+        if located is not None:
+            return located
+        memory = self.spatial_memory
+        calibration = (
+            intrinsics
+            if isinstance(intrinsics, CameraIntrinsics)
+            else CameraIntrinsics.from_matrix(intrinsics)
+        )
+        try:
+            landmark = memory.landmark_for_subgoal(current.subgoal_id)
+            candidates = generate_candidates(
+                depth_m=depth_m,
+                floor_mask=self._current_floor_mask,
+                intrinsics=calibration,
+                camera_to_world=camera_to_world,
+                image_shape=image.shape[:2],
+                frontiers=memory.frontiers(),
+                landmark_xyz=landmark.world_xyz if landmark is not None else None,
+                landmark_note=(
+                    f"the active subgoal's landmark ({current.description})"
+                    if landmark is not None else ""
+                ),
+                floor_y=memory.floor_y if memory.position is not None else None,
+                max_in_view=SOM_MAX_CANDIDATES,
+            )
+        except Exception as exc:
+            self.last_som_error = f"{type(exc).__name__}: {exc}"
+            return None
+        candidates = memory.filter_navigable(candidates)
+        if not any(c.kind != "turn" for c in candidates):
+            self.last_som_error = "no reachable in-view candidates"
+            return None
+        self.last_som_candidates = [
+            {
+                "label": c.label, "kind": c.kind, "distance_m": round(c.distance_m, 2),
+                "bearing_deg": round(c.bearing_deg, 1), "pixel_uv": c.pixel_uv,
+                "world_xyz": [round(v, 2) for v in c.world_xyz],
+            }
+            for c in candidates
+        ]
+        annotated = annotate_image(image, candidates)
+        listing = describe_candidates(candidates)
+        text = "\n".join((
+            self.task_memory.current_subgoal_context() if self.task_memory else "",
+            f"Full route instruction: {self.task_instruction}",
+            f"Required navigation phase: {self._navigation_phase}.",
+            self._landmark_context_for_waypoint(current),
+            self._behavior_context(),
+            "Options:",
+            listing,
+            "Choose one option label.",
+        ))
+        labels = {c.label: c for c in candidates}
+        chosen = None
+        response_text = ""
+        if self._oracle_goal_xyz is not None:
+            # DIAGNOSTIC: the candidate nearest the goal (planar), no model.
+            gx, gz = self._oracle_goal_xyz[0], self._oracle_goal_xyz[2]
+            chosen = min(
+                candidates,
+                key=lambda c: (c.world_xyz[0] - gx) ** 2 + (c.world_xyz[2] - gz) ** 2,
+            )
+            response_text = '{"choice":"%s","confidence":1.0,"evidence":"oracle"}' % chosen.label
+            self.last_waypoint_confidence = 1.0
+            self.last_waypoint_evidence = "oracle choice (diagnostic)"
+        for attempt in range(2 if chosen is None else 0):
+            prompt = text if attempt == 0 else (
+                text + "\nThe previous reply was not a valid option label; "
+                "reply with the exact JSON shape and one listed label."
+            )
+            try:
+                response = self.llm(
+                    [prompt, encode_png(annotated)],
+                    system_prompt=SOM_PROMPT,
+                    image_min_pixels=VLM_IMAGE_MIN_PIXELS,
+                    image_max_pixels=VLM_IMAGE_MAX_PIXELS,
+                    max_tokens=STRUCTURED_VLM_MAX_TOKENS,
+                    temperature=0,
+                )
+                response_text = str(response)
+                payload = self._extract_json_object(response_text)
+                choice = str(payload.get("choice", "")).strip().upper()
+                if choice in labels:
+                    chosen = labels[choice]
+                    self.last_waypoint_confidence = float(payload.get("confidence") or 0.0)
+                    self.last_waypoint_evidence = str(payload.get("evidence") or "")
+                    break
+            except Exception as exc:  # malformed reply: retry once, then fall back
+                self.last_som_error = f"{type(exc).__name__}: {exc}"
+        self.last_som_raw_response = response_text
+        self.last_model_response = response_text
+        self.last_waypoint_raw_response = response_text
+        if chosen is None:
+            self.last_som_error = self.last_som_error or "reply was not a listed label"
+            return None
+        self.last_som_choice = chosen.label
+        self.last_recovery_mode = None
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_model_intent = self._navigation_phase
+        self.last_waypoint_applied_intent = self._navigation_phase
+        self.last_waypoint_stop_disposition = None
+        self._final_stop_evidence.append(False)
+        if chosen.kind == "turn" and chosen.world_xyz is None:
+            return None
+        # Walk to the chosen point: a marker, or the unexplored area behind
+        # a turn option. Age scales with distance so a far marker is not
+        # abandoned half-way; stagnation still releases a blocked one.
+        target_xyz = chosen.world_xyz
+        if chosen.kind != "turn" and chosen.distance_m > SOM_MAX_TARGET_DISTANCE_M:
+            # Walk part of the way toward a far marker, then decide again.
+            position = np.asarray(camera_to_world, dtype=np.float64)[:3, 3]
+            direction = np.asarray(chosen.world_xyz) - position
+            direction[1] = 0.0
+            norm = float(np.linalg.norm(direction))
+            if norm > 1e-6:
+                scaled = position + direction / norm * SOM_MAX_TARGET_DISTANCE_M
+                target_xyz = (float(scaled[0]), float(chosen.world_xyz[1]), float(scaled[2]))
+        max_age = int(min(SOM_TARGET_MAX_AGE_STEPS, chosen.distance_m / 0.2 + 6))
+        committed = memory.commit_target(
+            target_xyz,
+            kind="som" if chosen.kind != "turn" else "frontier",
+            subgoal_id=current.subgoal_id,
+            reason=f"marker {chosen.label} ({chosen.kind}): {self.last_waypoint_evidence[:60]}",
+            tolerance_m=COMMITTED_TARGET_REACHED_M,
+            max_age_steps=max(8, max_age),
+            stagnation_steps=SPATIAL_TARGET_STAGNATION_STEPS,
+        )
+        if committed is None:
+            self.last_som_error = "chosen marker is not reachable"
+            return None
+        decision = self._spatial_target_decision(current, image_shape=image.shape[:2])
+        if decision is None:
+            return None
+        if chosen.pixel_uv is not None:
+            self.last_requested_pixel = chosen.pixel_uv
+            self.last_requested_normalized = (
+                int(chosen.pixel_uv[0] * 1000 / max(image.shape[1] - 1, 1)),
+                int(chosen.pixel_uv[1] * 1000 / max(image.shape[0] - 1, 1)),
+            )
+        self.last_waypoint_guard_reason = (
+            f"set-of-mark: model chose marker {chosen.label} ({chosen.kind}, "
+            f"{chosen.distance_m:.1f} m, {chosen.bearing_deg:+.0f}°) of "
+            f"{len(candidates)} options"
+        )
+        return decision
+
+    def _located_landmark_decision(
+        self,
+        current: Optional[Subgoal],
+        *,
+        image_shape: tuple[int, int],
+        depth_m: np.ndarray,
+        intrinsics: Any,
+        camera_to_world: Any,
+    ) -> Optional[NavigationDecision]:
+        """Walk to the Captioner-located landmark and lock it as the stage's
+        committed point, exactly as the pixel path does through
+        ``_steer_to_visible_landmark`` and ``_maybe_lock_doorway_waypoint``.
+
+        Subgoal completion for doorway and landmark stages is judged on
+        arrival at that committed point, so a set-of-mark choice must not
+        bypass it when the landmark is in view.
+        """
+        landmark = self.last_landmark
+        pixel = self.last_landmark_pixel
+        if pixel is None or not self._landmark_located_for_current_subgoal(current):
+            return None
+        try:
+            point = self.actor.waypoint_from_pixel(
+                pixel, depth_m, intrinsics, camera_to_world
+            )
+        except ValueError:
+            return None
+        if self.actor.camera_height_m is not None and not point.on_floor:
+            return None
+        if self._planar_waypoint_distance(point, camera_to_world=camera_to_world) < 0.4:
+            return None  # already beside it; the judge finishes the stage
+        committed = self.spatial_memory.commit_target(
+            point.world_xyz,
+            kind="landmark",
+            subgoal_id=current.subgoal_id,
+            reason=f"located landmark: {landmark.evidence[:60]}",
+            tolerance_m=COMMITTED_TARGET_REACHED_M,
+            max_age_steps=SOM_TARGET_MAX_AGE_STEPS,
+            stagnation_steps=SPATIAL_TARGET_STAGNATION_STEPS,
+        )
+        if committed is None:
+            return None
+        intent: NavigationIntent = (
+            self._navigation_phase
+            if self._navigation_phase != "STOP"
+            else "APPROACH_LANDMARK"
+        )
+        self.last_model_response = "steering to the located landmark"
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = intent
+        self.last_waypoint_applied_intent = intent
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_confidence = float(landmark.confidence)
+        self.last_waypoint_evidence = (
+            "steered to the floor beneath the Captioner-localized landmark: "
+            f"{landmark.evidence}"
+        )
+        self.last_waypoint_guard_reason = (
+            "overrode model: landmark is localized in the current image; "
+            "walking to the floor beneath the located landmark"
+        )
+        self.last_waypoint_stop_disposition = None
+        self.last_recovery_mode = None
+        self._final_stop_evidence.append(False)
+        # Lock the navmesh-snapped point so the completion judge measures
+        # arrival against the same target the follower is given.
+        self._maybe_lock_doorway_waypoint(
+            replace(point, world_xyz=committed.world_xyz, on_floor=True),
+            camera_to_world=camera_to_world,
+        )
+        decision = self._spatial_target_decision(current, image_shape=image_shape)
+        if decision is None:
+            return None
+        self.last_requested_pixel = pixel
+        self.last_requested_normalized = self.last_landmark_normalized or (500, 750)
+        self.last_waypoint_guard_reason = (
+            "overrode model: landmark is localized in the current image; "
+            "walking to the floor beneath the located landmark"
+        )
+        return decision
+
     def _spatial_frontier_decision(
         self,
         current: Optional[Subgoal],
@@ -1490,6 +1825,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         where the route continuation has to be.
         """
         reason = self.last_waypoint_guard_reason or ""
+        if not self.use_spatial_memory:
+            return None
         if not re.search(r"safe waypoint instead|safe fallback", reason):
             return None
         if not self._spatial_stage_eligible(current):
@@ -1502,7 +1839,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             return None
         if frontier is None:
             return None
-        memory.commit_target(
+        if memory.commit_target(
             frontier,
             kind="frontier",
             subgoal_id=current.subgoal_id,
@@ -1510,7 +1847,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             tolerance_m=COMMITTED_TARGET_REACHED_M,
             max_age_steps=SPATIAL_TARGET_MAX_AGE_STEPS,
             stagnation_steps=SPATIAL_TARGET_STAGNATION_STEPS,
-        )
+        ) is None:
+            return None
         decision = self._spatial_target_decision(current, image_shape=image_shape)
         if decision is not None:
             self.last_waypoint_guard_reason = (
@@ -1531,7 +1869,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             if self.task_memory is not None
             else None
         )
-        if not self._spatial_stage_eligible(current):
+        if not self.use_spatial_memory or not self._spatial_stage_eligible(current):
             return
         if (
             self._doorway_waypoint is not None

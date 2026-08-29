@@ -25,6 +25,7 @@ class CommittedTarget:
     reason: str = ""
     best_distance_m: Optional[float] = None
     stagnant_steps: int = 0
+    aligning_steps: int = 0
     updates: int = 0
     status: str = "active"
     distances: list[float] = field(default_factory=list)
@@ -73,12 +74,18 @@ class CommittedTarget:
         if self.best_distance_m is None or distance < self.best_distance_m - 0.10:
             self.best_distance_m = distance
             self.stagnant_steps = 0
+        elif abs(self.bearings[-1]) > 20.0 and self.aligning_steps < 14:
+            # Turning in place to face the target moves nothing yet; a
+            # target behind the agent needs up to twelve 15-degree turns.
+            self.aligning_steps += 1
         else:
             self.stagnant_steps += 1
         if self.stagnant_steps >= self.stagnation_steps:
             self.status = "stagnant"
             return self.status
-        if self.age(step) >= self.max_age_steps:
+        # Steps spent turning to face the target do not count against its
+        # age: the budget is for the walk, not the rotation before it.
+        if self.age(step) - self.aligning_steps >= self.max_age_steps:
             self.status = "stale"
             return self.status
         return self.status

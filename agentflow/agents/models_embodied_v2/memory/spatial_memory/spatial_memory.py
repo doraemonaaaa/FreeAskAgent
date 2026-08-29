@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 import numpy as np
 
+from .candidates import Candidate, relabel
 from .landmarks import LandmarkRegistry, SpatialLandmark
 from .occupancy_grid import FREE, OCCUPIED, UNKNOWN, Frontier, OccupancyGrid, path_length_m
 from .targets import CommittedTarget
@@ -56,6 +57,79 @@ class SpatialMemory:
         self._visited_frontiers: list[tuple[float, float]] = []
         self.last_path: Optional[list[tuple[float, float]]] = None
         self.last_release_reason: Optional[str] = None
+        # Controller traversability window (navmesh) around the agent, when
+        # the runner provides one: origin (x, z), resolution, bool mask.
+        self._nav_origin: Optional[tuple[float, float]] = None
+        self._nav_resolution: float = 0.25
+        self._nav_mask: Optional[np.ndarray] = None
+
+    # ------------------------------------------------------------ traversability
+    def set_traversability(
+        self,
+        *,
+        origin_xz: tuple[float, float],
+        resolution_m: float,
+        mask: np.ndarray,
+    ) -> None:
+        self._nav_origin = (float(origin_xz[0]), float(origin_xz[1]))
+        self._nav_resolution = float(resolution_m)
+        self._nav_mask = np.asarray(mask, dtype=bool)
+
+    @property
+    def has_traversability(self) -> bool:
+        return self._nav_mask is not None
+
+    def is_navigable(self, x: float, z: float) -> Optional[bool]:
+        """True/False inside the window, None when unknown."""
+        if self._nav_mask is None or self._nav_origin is None:
+            return None
+        col = int(math.floor((x - self._nav_origin[0]) / self._nav_resolution))
+        row = int(math.floor((z - self._nav_origin[1]) / self._nav_resolution))
+        rows, cols = self._nav_mask.shape
+        if not (0 <= row < rows and 0 <= col < cols):
+            return None
+        return bool(self._nav_mask[row, col])
+
+    def snap_navigable(
+        self, x: float, z: float, *, radius_m: float = 1.0
+    ) -> Optional[tuple[float, float]]:
+        """Nearest navigable cell centre within ``radius_m``; the point
+        itself when it is navigable or when no window is known."""
+        known = self.is_navigable(x, z)
+        if known is None or known:
+            return (x, z)
+        res = self._nav_resolution
+        col = int(math.floor((x - self._nav_origin[0]) / res))
+        row = int(math.floor((z - self._nav_origin[1]) / res))
+        r = int(math.ceil(radius_m / res))
+        rows, cols = self._nav_mask.shape
+        best = None
+        for dr in range(-r, r + 1):
+            for dc in range(-r, r + 1):
+                rr, cc = row + dr, col + dc
+                if not (0 <= rr < rows and 0 <= cc < cols) or not self._nav_mask[rr, cc]:
+                    continue
+                cx = self._nav_origin[0] + (cc + 0.5) * res
+                cz = self._nav_origin[1] + (rr + 0.5) * res
+                d = math.hypot(cx - x, cz - z)
+                if d <= radius_m and (best is None or d < best[0]):
+                    best = (d, cx, cz)
+        return None if best is None else (best[1], best[2])
+
+    def filter_navigable(
+        self, candidates: list[Candidate], *, radius_m: float = 0.75
+    ) -> list[Candidate]:
+        """Drop candidates the controller cannot reach; snap the rest."""
+        if not self.has_traversability:
+            return candidates
+        kept: list[Candidate] = []
+        for c in candidates:
+            snapped = self.snap_navigable(c.world_xyz[0], c.world_xyz[2], radius_m=radius_m)
+            if snapped is None:
+                continue
+            c.world_xyz = (snapped[0], c.world_xyz[1], snapped[1])
+            kept.append(c)
+        return relabel(kept)
 
     # ------------------------------------------------------------ episode
     def reset(self) -> None:
@@ -70,6 +144,8 @@ class SpatialMemory:
         self._visited_frontiers.clear()
         self.last_path = None
         self.last_release_reason = None
+        self._nav_origin = None
+        self._nav_mask = None
 
     # ------------------------------------------------------------ observe
     @staticmethod
@@ -146,11 +222,28 @@ class SpatialMemory:
         tolerance_m: float = 0.5,
         max_age_steps: int = 12,
         stagnation_steps: int = 6,
-    ) -> CommittedTarget:
+        snap: bool = True,
+    ) -> Optional[CommittedTarget]:
+        """Commit to a world point; None when the controller cannot reach it."""
+        world = tuple(float(v) for v in world_xyz)
+        if snap:
+            # The follower needs a navigable goal. The controller's
+            # traversability window is authoritative when known; otherwise
+            # at least move the point off the wall clearance band.
+            if self.has_traversability:
+                nav = self.snap_navigable(world[0], world[2], radius_m=1.0)
+                if nav is None:
+                    self.last_release_reason = "unreachable target"
+                    return None
+                world = (nav[0], world[1], nav[1])
+            else:
+                snapped = self.grid.snap_to_clear_free(world[0], world[2])
+                if snapped is not None:
+                    world = (snapped[0], world[1], snapped[1])
         if self.target is not None and self.target.status == "active":
             self.release_target("replaced")
         self.target = CommittedTarget(
-            world_xyz=tuple(float(v) for v in world_xyz),
+            world_xyz=world,
             kind=kind,
             subgoal_id=subgoal_id,
             created_step=max(self.step, 0),
@@ -237,6 +330,10 @@ class SpatialMemory:
         best = None
         for frontier in self.frontiers():
             if frontier.distance_m < min_distance_m:
+                continue
+            if self.is_navigable(*frontier.centre_xz) is False and self.snap_navigable(
+                *frontier.centre_xz, radius_m=0.5
+            ) is None:
                 continue
             if any(
                 math.hypot(frontier.centre_xz[0] - vx, frontier.centre_xz[1] - vz) < 0.75
