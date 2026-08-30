@@ -157,6 +157,13 @@ STAIRS_LEVEL_TOLERANCE_M = 0.05
 # this far in the requested direction; past TURN_ABANDON_DEG it has turned a
 # half circle and the turn phase ends regardless of what the model asks for.
 TURN_MIN_PROGRESS_DEG = 60.0
+# "Turn around" is a rotation of about 180 degrees in either direction; the
+# stage is measured like a left/right turn but against this larger target.
+TURN_AROUND_MIN_PROGRESS_DEG = 150.0
+TURN_AROUND_PATTERN = (
+    r"\b(?:turn\s+(?:all\s+the\s+way\s+)?(?:around|back|about)|about[- ]face|"
+    r"turn\s+180|(?:do|make)\s+a\s+180|reverse\s+direction)\b"
+)
 TURN_ABANDON_DEG = 180.0
 # Bound every online visual request. Temporal-memory requests are also resized
 # by TemporalCaptioner before reaching the engine.

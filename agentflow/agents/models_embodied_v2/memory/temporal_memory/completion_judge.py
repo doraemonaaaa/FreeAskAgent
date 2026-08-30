@@ -37,6 +37,8 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     STAGE_SKIP_STALL_OBSERVATIONS,
     STAIRS_LEVEL_TOLERANCE_M,
     STAIRS_MIN_RISE_M,
+    TURN_AROUND_MIN_PROGRESS_DEG,
+    TURN_AROUND_PATTERN,
     TURN_MIN_PROGRESS_DEG,
     TURN_TARGET_CENTRED_U,
     TURN_TARGET_MIN_PROGRESS_DEG,
@@ -369,8 +371,18 @@ class CompletionMemoryMixin:
     @staticmethod
     def _turn_direction(subgoal: Any) -> Optional[str]:
         description = getattr(subgoal, "description", "") or ""
+        if re.search(TURN_AROUND_PATTERN, description, re.IGNORECASE):
+            return "around"
         match = re.search(r"\bturn\s+(left|right)\b", description, re.IGNORECASE)
         return match.group(1).lower() if match else None
+
+    @staticmethod
+    def _turn_target_deg(subgoal: Any) -> float:
+        """Rotation that completes the stage: ~180 for "turn around"."""
+        description = getattr(subgoal, "description", "") or ""
+        if re.search(TURN_AROUND_PATTERN, description, re.IGNORECASE):
+            return TURN_AROUND_MIN_PROGRESS_DEG
+        return TURN_MIN_PROGRESS_DEG
 
     def append_observation(self, image: Any) -> MemoryFrame:
         frame = super().append_observation(image)
@@ -571,6 +583,7 @@ class CompletionMemoryMixin:
         )
         stairs_incomplete = stairs_direction is not None and not stairs_done
         turn_direction = self._turn_direction(self._subgoal)
+        turn_target = self._turn_target_deg(self._subgoal)
         landmark_centred = bool(
             scene.landmark.visible
             and scene.landmark.u is not None
@@ -578,7 +591,7 @@ class CompletionMemoryMixin:
         )
         turn_incomplete = bool(
             turn_direction is not None
-            and self._turn_progress_deg < TURN_MIN_PROGRESS_DEG
+            and self._turn_progress_deg < turn_target
             and not (
                 landmark_centred
                 and self._turn_progress_deg >= TURN_TARGET_MIN_PROGRESS_DEG
@@ -591,7 +604,7 @@ class CompletionMemoryMixin:
         turn_done = bool(
             turn_direction is not None
             and (
-                self._turn_progress_deg >= TURN_MIN_PROGRESS_DEG
+                self._turn_progress_deg >= turn_target
                 or (
                     landmark_centred
                     and self._turn_progress_deg >= TURN_TARGET_MIN_PROGRESS_DEG
@@ -677,7 +690,7 @@ class CompletionMemoryMixin:
             self._last_completion_guard = (
                 f"deferred completion: measured {turn_direction} turn is "
                 f"{self._turn_progress_deg:.0f} deg, below "
-                f"{TURN_MIN_PROGRESS_DEG:.0f} deg"
+                f"{turn_target:.0f} deg"
             )
         elif (
             completed

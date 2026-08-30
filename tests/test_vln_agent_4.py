@@ -1119,3 +1119,58 @@ def test_located_landmark_is_walked_to_and_locked_instead_of_asking_set_of_mark(
     assert agent._doorway_waypoint.world_xyz == pytest.approx(target.world_xyz, abs=1e-6)
     assert decision.point is not None
     assert "walking to the floor beneath the located landmark" in agent.last_waypoint_guard_reason
+
+
+class TurnAroundEngine(RoutedEngine):
+    """Plans a 'Turn around' stage; the waypoint model keeps asking to turn."""
+
+    def __call__(self, content, *, system_prompt, **kwargs):
+        if system_prompt.startswith("You are an indoor navigation task planner"):
+            self.calls.append(("plan", content, kwargs))
+            return "1|Turn around|The hallway behind is now ahead\n2|Walk down the hallway to the pool area|The camera is beside the pool"
+        if system_prompt.startswith("You are an indoor navigation actor"):
+            self.calls.append(("waypoint", content, kwargs))
+            return ('{"action_mode":"EXECUTION","execution":{"stop":false,"intent":"TURN_LEFT","turn_deg":-45},'
+                    '"confidence":0.9,"evidence":"nothing useful ahead"}')
+        return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+
+def test_turn_around_stage_is_measured_as_a_half_turn():
+    engine = TurnAroundEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Turn around and walk down the hallway to the pool area."
+    agent.prepare_task(instruction)
+    assert agent.subgoals[0].description == "Turn around"
+    intrinsics = np.array(((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0)))
+    base = np.eye(4)
+    base[1, 3] = 1.25
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+
+    decision = agent.act(rgb, _room_depth(), instruction, intrinsics, base)
+    assert agent._navigation_phase == "TURN_LEFT"  # driven like a left turn
+    assert decision.turn_deg == -45
+    # 90 degrees is not a half turn yet: still stage 1, still turning.
+    for yaw in (-45.0, -90.0):
+        decision = agent.act(rgb, _room_depth(), instruction, intrinsics, _turned(base, yaw))
+    assert agent.task_memory.get_current_subgoal().subgoal_id == "1"
+    assert decision.turn_deg == -45
+    # Past 150 degrees the stage completes by measurement, whatever the model says.
+    for yaw in (-135.0, -165.0):
+        agent.act(rgb, _room_depth(), instruction, intrinsics, _turned(base, yaw))
+    assert agent.task_memory.get_current_subgoal().subgoal_id == "2"
+    assert agent._navigation_phase == "FINAL_APPROACH"
+
+
+def test_turn_around_accepts_either_direction():
+    engine = TurnAroundEngine()
+    agent = VLNAgent(engine=engine, patch_radius_px=0, camera_height_m=1.25)
+    instruction = "Turn around and walk down the hallway to the pool area."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0)))
+    base = np.eye(4)
+    base[1, 3] = 1.25
+    rgb = np.zeros((24, 32, 3), dtype=np.uint8)
+    agent.act(rgb, _room_depth(), instruction, intrinsics, base)
+    for yaw in (45.0, 90.0, 135.0, 165.0):  # the follower happened to turn right
+        agent.act(rgb, _room_depth(), instruction, intrinsics, _turned(base, yaw))
+    assert agent.task_memory.get_current_subgoal().subgoal_id == "2"

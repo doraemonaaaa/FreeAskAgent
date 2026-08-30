@@ -110,7 +110,7 @@ class _SceneModelResult(BaseModel):
     error_mode: str
     error_confidence: float
     final_target: _FinalTargetModel
-    evidence: str
+    evidence: str = ""  # free-text justification; some VLMs (Qwen2.5-VL) omit it
 
 
 SYSTEM_PROMPT = """Inspect the ordered first-person navigation images, oldest

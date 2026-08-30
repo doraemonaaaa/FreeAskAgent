@@ -74,6 +74,8 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     TEMPORAL_MAX_IMAGE_EDGE,
     SUBGOAL_PROMPT,
     TURN_ABANDON_DEG,
+    TURN_AROUND_MIN_PROGRESS_DEG,
+    TURN_AROUND_PATTERN,
     TURN_ALIGNMENT_DEG,
     TURN_EVIDENCE_DEG,
     TURN_TARGET_CENTRED_U,
@@ -2029,6 +2031,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             return "TURN_LEFT"
         if re.search(r"\bturn\s+right\b", description):
             return "TURN_RIGHT"
+        if re.search(TURN_AROUND_PATTERN, description):
+            # A half turn in either direction; it is driven and measured
+            # like a left turn, against the larger target below.
+            return "TURN_LEFT"
         # The last stage is the destination whatever words the planner chose:
         # only FINAL_APPROACH keeps the waypoint model, and with it STOP, in
         # the loop every step.
@@ -2082,12 +2088,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # rotated far enough the stage's movement part takes over, and past a
         # half circle it does so unconditionally rather than spin in place.
         turn_progress = self._turn_progress_deg(subgoal)
+        around = self._is_turn_around(subgoal)
+        alignment = TURN_AROUND_MIN_PROGRESS_DEG if around else TURN_ALIGNMENT_DEG
+        abandon = TURN_ABANDON_DEG + 90.0 if around else TURN_ABANDON_DEG
         # The turn exists to bring the stage's landmark into view. Once the
         # Captioner has it near the image centre, turning on to the nominal
         # angle would only turn away from it again.
         if (
-            turn_progress < TURN_ALIGNMENT_DEG
-            and abs(self._subgoal_net_yaw_deg) < TURN_ABANDON_DEG
+            turn_progress < alignment
+            and abs(self._subgoal_net_yaw_deg) < abandon
             and not (
                 turn_progress >= TURN_TARGET_MIN_PROGRESS_DEG
                 and self._landmark_centred_for_current_subgoal(subgoal)
@@ -2115,8 +2124,17 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             and abs(landmark.u - 500) <= TURN_TARGET_CENTRED_U
         )
 
+    @staticmethod
+    def _is_turn_around(subgoal: Optional[Subgoal]) -> bool:
+        return bool(
+            subgoal is not None
+            and re.search(TURN_AROUND_PATTERN, subgoal.description, re.IGNORECASE)
+        )
+
     def _turn_progress_deg(self, subgoal: Optional[Subgoal]) -> float:
         """Rotation so far in the direction the subgoal asks for, in degrees."""
+        if self._is_turn_around(subgoal):
+            return abs(self._subgoal_net_yaw_deg)  # either way round counts
         initial_phase = self._phase_for_subgoal(subgoal)
         if initial_phase == "TURN_LEFT":
             return -self._subgoal_net_yaw_deg
@@ -2131,6 +2149,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             " ",
             subgoal.description,
             flags=re.IGNORECASE,
+        ).strip()
+        remainder = re.sub(
+            TURN_AROUND_PATTERN + r"[\s,]*(?:and|then)?", " ", remainder, flags=re.IGNORECASE
         ).strip()
         if not remainder:
             return "FOLLOW_CORRIDOR"
