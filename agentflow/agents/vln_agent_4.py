@@ -318,6 +318,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._force_forward_this_step = False
         self._force_left_turn_this_step = False
         self.last_som_image = None
+        # Only the step resolved from surrounding views reports a previewed
+        # view; leaving these set would tag every later step (and video
+        # frame) with a stale PREVIEW marker.
+        self.last_preview_view_index = None
+        self.last_preview_yaw_deg = None
         # Preview views belong to the step that asked for them. Holding them
         # past it would keep several images alive for the rest of the episode
         # and let a later reader mistake them for this step's.
