@@ -1669,6 +1669,20 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             action_mode="EXECUTION",
         )
 
+    def _som_engine(self):
+        """The engine for set-of-mark choices: a fine-tuned adapter when
+        ``VLN_SOM_MODEL`` names one on the same vLLM server, else the main
+        engine. Lets a LoRA trained for the choice serve only that call."""
+        name = os.environ.get("VLN_SOM_MODEL")
+        if not name:
+            return self.llm
+        if getattr(self, "_som_llm_name", None) != name:
+            from agentflow.agents.engine.remote_qwen3vl import RemoteQwen3VL
+
+            self._som_llm = RemoteQwen3VL(name)
+            self._som_llm_name = name
+        return self._som_llm
+
     def _som_decision(
         self,
         current: Optional[Subgoal],
@@ -1773,7 +1787,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 "reply with the exact JSON shape and one listed label."
             )
             try:
-                response = self.llm(
+                response = self._som_engine()(
                     [prompt, encode_png(annotated)],
                     system_prompt=SOM_PROMPT,
                     image_min_pixels=VLM_IMAGE_MIN_PIXELS,
