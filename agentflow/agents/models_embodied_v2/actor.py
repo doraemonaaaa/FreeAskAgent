@@ -85,6 +85,8 @@ class Actor:
         # resulting waypoint sits in mid-air where the agent can never arrive.
         self.camera_height_m = camera_height_m
         self.max_floor_offset_m = max_floor_offset_m
+        # Per-stage widening of the walkable band (stairs); None = default.
+        self.floor_band_override_m = None
         self.last_waypoint_on_floor: Optional[bool] = None
 
     def waypoint_from_pixel(
@@ -157,7 +159,12 @@ class Actor:
             + camera_to_world[1, 3]
         )
         floor_y = camera_to_world[1, 3] - self.camera_height_m
-        return np.abs(y_world - floor_y) <= self.max_floor_offset_m
+        band = (
+            self.floor_band_override_m
+            if self.floor_band_override_m is not None
+            else self.max_floor_offset_m
+        )
+        return np.abs(y_world - floor_y) <= band
 
     @staticmethod
     def as_rgb_array(rgb: Any) -> np.ndarray:

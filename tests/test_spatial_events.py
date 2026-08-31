@@ -254,3 +254,45 @@ def test_guard_ablation_trusts_model_completion_verbatim(monkeypatch):
     memory.set_motion_evidence(translation_m=0.0, yaw_delta_deg=0.0)
     memory.append_observation(_frame(0))
     assert memory.analyze().completed is True
+
+
+def test_located_landmark_arrival_reaches_the_judge():
+    """A spatial landmark target's distance flows into the judge's arrival rule."""
+    import numpy as np
+    import sys, os
+    sys.path.insert(0, os.path.dirname(__file__))
+    from test_vln_agent_4 import RoutedEngine
+    from agentflow.agents.vln_agent_4 import VLNAgent
+
+    class TwoStage(RoutedEngine):
+        def __call__(self, content, *, system_prompt, **kwargs):
+            if system_prompt.startswith("You are an indoor navigation task planner"):
+                self.calls.append(("plan", content, kwargs))
+                return ("1|Walk to the couch|The couch is directly ahead, within a step\n"
+                        "2|Stop at the window|The window is directly ahead")
+            return super().__call__(content, system_prompt=system_prompt, **kwargs)
+
+    agent = VLNAgent(engine=TwoStage())
+    instruction = "Walk to the couch then stop at the window."
+    agent.prepare_task(instruction)
+    intrinsics = np.array(((16.0, 0.0, 16.0), (0.0, 16.0, 12.0), (0.0, 0.0, 1.0)))
+    pose = np.eye(4)
+    agent.act(np.zeros((24, 32, 3), np.uint8), np.full((24, 32), 2.0, np.float32),
+              instruction, intrinsics, pose)
+    current = agent.task_memory.get_current_subgoal()
+    # The model located the stage landmark 2 m ahead; commit it.
+    agent.spatial_memory.commit_target(
+        (0.0, 0.0, -2.0), kind="landmark", subgoal_id=current.subgoal_id,
+        reason="located landmark", tolerance_m=0.5, max_age_steps=50,
+        stagnation_steps=50,
+    )
+    distance = agent._doorway_target_distance(current, camera_to_world=pose)
+    assert distance is not None and 1.5 < distance < 2.5
+    # Walk onto the point: the reported distance shrinks below tolerance.
+    for z in (-0.7, -1.4, -1.9):
+        pose = pose.copy(); pose[2, 3] = z
+        agent.act(np.zeros((24, 32, 3), np.uint8), np.full((24, 32), 2.0, np.float32),
+                  instruction, intrinsics, pose)
+    d2 = agent._doorway_target_distance(current, camera_to_world=pose)
+    assert d2 is None or d2 <= 0.6  # reached (target may already be released as "reached")
+

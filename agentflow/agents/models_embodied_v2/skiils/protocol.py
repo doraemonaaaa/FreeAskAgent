@@ -189,6 +189,18 @@ DOORWAY_STAGE_PATTERN = (
     r"threshold|cross(?:ed|ing)?|out\s+of|walk\s+out|(?:go|walk|pass)\s+through)\b"
 )
 TURN_STAGE_PATTERN = r"\bturn\s+(?:left|right)\b"
+STAIRS_STAGE_PATTERN = r"\b(?:stairs?|staircase|stairway|steps)\b"
+# During a stairs stage the walkable band widens from +-0.30 m to this value:
+# stair treads sit above the current floor plane and would otherwise be
+# rejected by the flat-floor gate everywhere (waypoint snap, doorway lock,
+# target commit), leaving the agent pinned at the bottom step.
+STAIRS_FLOOR_BAND_M = 1.5
+
+
+def stage_is_stairs(text: str) -> bool:
+    import re
+
+    return bool(re.search(STAIRS_STAGE_PATTERN, text, flags=re.IGNORECASE))
 
 
 def stage_is_doorway(text: str) -> bool:

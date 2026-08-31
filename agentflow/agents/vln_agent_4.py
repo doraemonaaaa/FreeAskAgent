@@ -1311,6 +1311,17 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if point is None or current_id != self._doorway_waypoint_subgoal_id:
             point = self._judge_target_point
             if point is None or current_id != self._judge_target_subgoal_id:
+                # Third source: the spatial memory's model-located landmark
+                # point for this stage. Without it the judge never learns
+                # that the agent physically arrived, and 17/28 stalled
+                # episodes were exactly "landmark point reached, stage never
+                # credited" (docs 2026-08-31 §15). som/frontier targets stay
+                # excluded: they are mid-route waypoints, not endpoints.
+                landmark_target = self._spatial_landmark_target(current_id)
+                if landmark_target is not None:
+                    distance = landmark_target.current_distance_m()
+                    if distance is not None:
+                        return float(distance)
                 return None
         if self._waypoint_passed(point, camera_to_world=camera_to_world):
             return 0.0
@@ -1318,6 +1329,20 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             point,
             camera_to_world=camera_to_world,
         )
+
+    def _spatial_landmark_target(self, current_id: Optional[str]):
+        """The active model-located landmark target for this stage, if any."""
+        if not self.use_spatial_memory or current_id is None:
+            return None
+        target = self.spatial_memory.target
+        if (
+            target is not None
+            and target.status == "active"
+            and target.kind == "landmark"
+            and target.subgoal_id == current_id
+        ):
+            return target
+        return None
 
     def _judge_target_tolerance(self, current: Optional[Subgoal]) -> float:
         current_id = current.subgoal_id if current is not None else None
@@ -1331,6 +1356,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             and current_id == self._judge_target_subgoal_id
         ):
             return self._judge_target_tolerance_m
+        landmark_target = self._spatial_landmark_target(current_id)
+        if landmark_target is not None:
+            return float(landmark_target.tolerance_m)
         return COMMITTED_TARGET_REACHED_M
 
     def _locked_doorway_decision(
