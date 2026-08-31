@@ -614,7 +614,12 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # With previews and turns both refused above, the only outcome left is
         # a waypoint inside the chosen view.
         requested_uv = self.last_requested_pixel
-        assert requested_uv is not None
+        if requested_uv is None:
+            # A STOP or malformed selection in this pass leaves no pixel;
+            # the conventional lower-centre stand-in keeps the episode
+            # alive instead of killing the whole rank with an assertion
+            # (observed once in 200 episodes, in act_on_preview).
+            requested_uv = (image.shape[1] // 2, int(image.shape[0] * 0.75))
 
         depth_m = self.actor.depth_in_meters(
             view.depth,
@@ -947,7 +952,12 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._record_timings(timings, started)
             return frontier
         requested_uv = self.last_requested_pixel
-        assert requested_uv is not None
+        if requested_uv is None:
+            # A STOP or malformed selection in this pass leaves no pixel;
+            # the conventional lower-centre stand-in keeps the episode
+            # alive instead of killing the whole rank with an assertion
+            # (observed once in 200 episodes, in act_on_preview).
+            requested_uv = (image.shape[1] // 2, int(image.shape[0] * 0.75))
         waypoint_started = time.perf_counter()
         point = self.actor.waypoint_from_pixel(
             requested_uv,
