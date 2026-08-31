@@ -28,6 +28,11 @@ class CommittedTarget:
     aligning_steps: int = 0
     updates: int = 0
     status: str = "active"
+    walked_m: float = 0.0
+    last_position_xz: Optional[tuple[float, float]] = None
+    # max(4 m, 2 x initial distance): more walking than that without reaching
+    # the point means the point was wrong, however smoothly the walk goes.
+    walk_budget_m: Optional[float] = None
     distances: list[float] = field(default_factory=list)
     # Signed bearing from the heading to the target at each update; right is
     # positive. A large recent bearing means the agent is still turning to
@@ -54,6 +59,14 @@ class CommittedTarget:
         dx = self.world_xyz[0] - position_xz[0]
         dz = self.world_xyz[2] - position_xz[1]
         distance = math.hypot(dx, dz)
+        if self.last_position_xz is not None:
+            self.walked_m += math.hypot(
+                position_xz[0] - self.last_position_xz[0],
+                position_xz[1] - self.last_position_xz[1],
+            )
+        self.last_position_xz = (float(position_xz[0]), float(position_xz[1]))
+        if self.walk_budget_m is None:
+            self.walk_budget_m = max(4.0, 2.0 * distance)
         self.distances.append(distance)
         yaw = math.radians(yaw_deg)
         forward = (math.sin(yaw), -math.cos(yaw))
@@ -82,6 +95,9 @@ class CommittedTarget:
             self.stagnant_steps += 1
         if self.stagnant_steps >= self.stagnation_steps:
             self.status = "stagnant"
+            return self.status
+        if self.walked_m > self.walk_budget_m:
+            self.status = "overrun"
             return self.status
         # Steps spent turning to face the target do not count against its
         # age: the budget is for the walk, not the rotation before it.

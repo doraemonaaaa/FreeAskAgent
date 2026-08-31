@@ -39,6 +39,7 @@ from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import
 )
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
+    STAGE_PATH_OVERRUN_M,
     BEHAVIOR_HISTORY_SIZE,
     COMMITTED_TARGET_REACHED_M,
     COMMITTED_TARGET_TOLERANCE_FRACTION,
@@ -241,6 +242,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._corridor_forward_streak = 0
         self._corridor_heading_yaw_deg: Optional[float] = None
         self._subgoal_net_yaw_deg = 0.0
+        self._subgoal_walked_m = 0.0
+        self._overrun_fired_at_m = 0.0
+        self._force_preview_this_step = False
+        self._overrun_count = 0
         self._turn_follow_phase_started = False
         # A model-localized doorway is a stable physical target. Keep its
         # world-space waypoint across steps instead of letting independent VLM
@@ -345,6 +350,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if had_previous_pose:
             self._update_preview_progress()
             self._update_recovery_progress(translation_m)
+            self._subgoal_walked_m += float(translation_m)
             self._record_behavior(
                 subgoal_id=self.last_subgoal_before,
                 translation_m=translation_m,
@@ -379,6 +385,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                     camera_to_world=camera_to_world,
                 ),
                 reach_tolerance_m=self._judge_target_tolerance(current),
+            )
+            self.temporal_memory.set_doorway_crossing(
+                self._spatial_crossing_this_step()
             )
             self.temporal_memory.set_depth_observation(self._current_depth_m)
             self.temporal_memory.set_turn_progress(
@@ -820,6 +829,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             current,
             camera_to_world=camera_to_world,
         )
+        self._stage_overrun_reorient(current)
         locked = self._locked_doorway_decision(
             current,
             camera_to_world=camera_to_world,
@@ -840,6 +850,19 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             timings["waypoint_ms"] = 0.0
             self._record_timings(timings, started)
             return spatial
+        if self._force_preview_this_step:
+            # Stage-overrun reorientation: rendering costs no episode step
+            # and the preview handler re-chooses a heading from all views.
+            self._force_preview_this_step = False
+            timings["depth_ms"] = 0.0
+            timings["select_pixel_ms"] = 0.0
+            timings["waypoint_ms"] = 0.0
+            self._record_timings(timings, started)
+            return NavigationDecision(
+                stop=False,
+                raw_response="stage overrun: requesting surrounding views",
+                action_mode="PREVIEW",
+            )
 
         depth_started = time.perf_counter()
         depth_m = self.actor.depth_in_meters(
@@ -1417,7 +1440,30 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
         except Exception as exc:  # the map is an aid, not a dependency
             self.last_spatial_error = f"{type(exc).__name__}: {exc}"
-        self.last_spatial_summary = self.spatial_memory.summary()
+        summary = self.spatial_memory.summary()
+        if getattr(self, "_overrun_count", 0):
+            summary += " ovr={}".format(self._overrun_count)
+        crossings = getattr(self.spatial_memory, "crossings", ())
+        if crossings:
+            summary += " door_evts={}".format(len(crossings))
+            if self.spatial_memory.crossing_detected_at(self._spatial_step):
+                event = crossings[-1]
+                summary += " EVT=door@({:.1f},{:.1f})w{:.2f}m@s{}".format(
+                    event.position_xz[0], event.position_xz[1],
+                    event.width_m, event.step,
+                )
+        self.last_spatial_summary = summary
+
+    def _spatial_crossing_this_step(self) -> bool:
+        """Map-measured doorway crossing confirmed by this step's observation."""
+        if not self.use_spatial_memory:
+            return False
+        try:
+            return bool(
+                self.spatial_memory.crossing_detected_at(self._spatial_step)
+            )
+        except Exception:
+            return False
 
     def _spatial_stage_eligible(self, current: Optional[Subgoal]) -> bool:
         """Stages that walk to a point: not turns, not the final approach.
@@ -1488,6 +1534,35 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             world_xyz=tuple(float(v) for v in world_xyz),
             on_floor=True,
         )
+
+    def _stage_overrun_reorient(self, current: Optional[Subgoal]) -> bool:
+        """Fire once per STAGE_PATH_OVERRUN_M walked on one unfinished stage.
+
+        Runs before every waypoint-reuse path (doorway lock included): more
+        walking than any single stage should need means the pursued point is
+        wrong, so every held target is dropped and one PREVIEW look-around is
+        forced to re-choose the heading from all views.
+        """
+        if current is None:
+            return False
+        # The final stage is included: a route whose last stage runs away
+        # (ep 67: 20+ m on one held target) needs the same look-around, and
+        # a PREVIEW does not interfere with the stop protocol.
+        if self._subgoal_walked_m - self._overrun_fired_at_m <= STAGE_PATH_OVERRUN_M:
+            return False
+        self._overrun_fired_at_m = self._subgoal_walked_m
+        self._force_preview_this_step = True
+        self._overrun_count += 1
+        self._clear_doorway_waypoint()
+        if self.use_spatial_memory and self.spatial_memory.target is not None:
+            self.spatial_memory.release_target("stage overrun")
+        self.last_error_guard_reason = (
+            "stage overrun: {:.1f} m walked on one stage; dropped held "
+            "targets and requesting surrounding views".format(
+                self._subgoal_walked_m
+            )
+        )
+        return True
 
     def _spatial_target_decision(
         self,
@@ -2068,6 +2143,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._corridor_forward_streak = 0
             self._corridor_heading_yaw_deg = None
             self._subgoal_net_yaw_deg = 0.0
+            self._subgoal_walked_m = 0.0
+            self._overrun_fired_at_m = 0.0
             self._turn_follow_phase_started = False
         self._navigation_phase = (
             self._post_turn_phase(subgoal)

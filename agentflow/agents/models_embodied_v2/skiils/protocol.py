@@ -20,7 +20,18 @@ from agentflow.agents.models_embodied_v2.data_models import (
 )
 
 
-DEFAULT_MODEL_PATH = "models/JoyAI-VL-Interaction"
+import os
+
+
+def _env_int(name: str, default: int) -> int:
+    """Deployment override (set by the runner's config.yaml); default otherwise."""
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+DEFAULT_MODEL_PATH = os.environ.get("VLN_MODEL_PATH", "models/JoyAI-VL-Interaction")
 # Planning runs once per episode and its retries are sampled, so a third
 # attempt is cheap insurance against one malformed plan aborting the run.
 SUBGOAL_GENERATION_ATTEMPTS = 3
@@ -64,16 +75,16 @@ TURN_EVIDENCE_DEG = 5.0
 # 16 frames at 320 px cost 6.6 s per Captioner call and raised its malformed
 # JSON rate from 9 % (one frame) to 36 %; eight frames keep the crossing
 # evidence while halving both.
-MAX_COMPLETION_EVIDENCE_FRAMES = 8
+MAX_COMPLETION_EVIDENCE_FRAMES = _env_int("VLN_COMPLETION_EVIDENCE_FRAMES", 8)
 # Judge a plain walk/approach stage every N observations instead of every
 # step. Doorway, turn and final stages are still judged on every step: their
 # completion depends on the exact frame in which the jambs pass or the target
 # is beside the camera.
-CAPTIONER_ANALYSIS_INTERVAL_STEPS = 2
+CAPTIONER_ANALYSIS_INTERVAL_STEPS = _env_int("VLN_CAPTIONER_INTERVAL_STEPS", 2)
 # Full single-line scene JSON is ~150 tokens; the model sometimes
 # pretty-prints it, which roughly doubles that, so leave headroom and let the
 # closing brace end generation early.
-CAPTIONER_MAX_TOKENS = 512
+CAPTIONER_MAX_TOKENS = _env_int("VLN_CAPTIONER_MAX_TOKENS", 512)
 # Spatial Memory committed targets (memory/spatial_memory): a world point the
 # agent walks to without re-querying the waypoint model. Released when
 # reached, walked past, not closer for STAGNATION steps, or older than
@@ -157,6 +168,13 @@ STAIRS_LEVEL_TOLERANCE_M = 0.05
 # this far in the requested direction; past TURN_ABANDON_DEG it has turned a
 # half circle and the turn phase ends regardless of what the model asks for.
 TURN_MIN_PROGRESS_DEG = 60.0
+# A stage that has cost this many walked metres without completing is being
+# pursued in the wrong direction: drop the committed target and look around.
+STAGE_PATH_OVERRUN_M = 10.0
+# One committed target may cost at most max(MIN, FACTOR x its initial
+# distance) of walking before it is released as an overrun.
+TARGET_WALK_BUDGET_MIN_M = 4.0
+TARGET_WALK_BUDGET_FACTOR = 2.0
 # "Turn around" is a rotation of about 180 degrees in either direction; the
 # stage is measured like a left/right turn but against this larger target.
 TURN_AROUND_MIN_PROGRESS_DEG = 150.0
@@ -170,10 +188,10 @@ TURN_ABANDON_DEG = 180.0
 VLM_IMAGE_MIN_PIXELS = 64**2
 # 224 px left a 640x480 frame as ~35 visual tokens, too few to place a
 # doorway; 448 px is ~140 tokens, still cheap now that inference is bf16.
-VLM_IMAGE_MAX_PIXELS = 448**2
+VLM_IMAGE_MAX_PIXELS = _env_int("VLN_IMAGE_MAX_PIXELS", 448**2)
 # 16 frames x 320 px is ~1200 visual tokens per scene call. At 160 px the
 # landmark position the Captioner reports was unusable.
-TEMPORAL_MAX_IMAGE_EDGE = 320
+TEMPORAL_MAX_IMAGE_EDGE = _env_int("VLN_TEMPORAL_MAX_IMAGE_EDGE", 320)
 # Below this Captioner confidence a localized landmark is not trusted to
 # override the waypoint model's own TURN/PREVIEW request.
 # A landmark the Captioner marks visible with a pixel is a structured claim
@@ -194,7 +212,7 @@ TURN_TARGET_MIN_PROGRESS_DEG = 15.0
 # safe fallback waypoint.  A PREVIEW reply is far shorter and ends early.
 # 96 tokens truncated ~3 % of replies once the evidence clause grew; 192
 # leaves room for the nested shape plus a 20-word evidence.
-STRUCTURED_VLM_MAX_TOKENS = 192
+STRUCTURED_VLM_MAX_TOKENS = _env_int("VLN_STRUCTURED_VLM_MAX_TOKENS", 192)
 BEHAVIOR_HISTORY_SIZE = 8
 LANDMARK_HISTORY_SIZE = 6
 CORRIDOR_LOCK_FORWARD_STEPS = 2
