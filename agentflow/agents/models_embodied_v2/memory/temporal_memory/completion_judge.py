@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import replace
 import json
+import os
 import re
 from typing import Any, Deque, Optional
 
@@ -684,6 +685,31 @@ class CompletionMemoryMixin:
             self._doorway_crossed_streak >= DOORWAY_CROSSED_STREAK_ACCEPT
             and self._subgoal_path_length_m >= DOORWAY_CROSSED_MIN_PATH_M
         )
+        # Ablation switch (VLN_JUDGE_GUARDS=0): trust the model's own
+        # ``completed`` verbatim -- no measured accepts, no vetoes, no
+        # streaks, no stage skip. Quantifies what the rule layer is worth.
+        if os.environ.get("VLN_JUDGE_GUARDS", "1") == "0":
+            self._last_completion_guard = (
+                "guards disabled: model-owned completion"
+            )
+            raw_payload = {"scene": scene.raw_response,
+                           "completion_guard": self._last_completion_guard}
+            return self._store(CaptionResult(
+                subgoal_id=scene.subgoal_id,
+                completed=completed,
+                error=scene.error,
+                error_mode=scene.error_mode,
+                raw_response=json.dumps(raw_payload, ensure_ascii=False),
+                latency_ms=scene.latency_ms,
+                error_confidence=scene.error_confidence,
+                error_evidence=scene.error_evidence,
+                completion_confidence=scene.completion_confidence,
+                completion_evidence=scene.completion_evidence,
+                door_state=scene.door_state,
+                door_camera_side=scene.door_camera_side,
+                landmark=scene.landmark,
+                final_target=scene.final_target,
+            ))
         # A measured constriction crossing is to a doorway stage what net
         # yaw is to a turn stage: the event itself is the completion
         # criterion, and the map saw it happen. The model keeps a veto only

@@ -231,3 +231,26 @@ def test_shared_doorway_classifier_extends_recall_and_yields_to_turns():
     assert not stage_is_doorway("Turn left at the doorway The left hallway is centred")
     assert not stage_is_doorway("Turn around and face the doorway ...")
     assert not stage_is_doorway("Walk to the couch The couch is directly ahead")
+
+
+def test_guard_ablation_trusts_model_completion_verbatim(monkeypatch):
+    monkeypatch.setenv("VLN_JUDGE_GUARDS", "0")
+    from test_temporal_memory import SceneCaptioner, _frame, _scene_result
+    from agentflow.agents.models_embodied_v2.memory import TaskMemory, TemporalMemory
+    from agentflow.agents.models_embodied_v2 import Subgoal
+    task = TaskMemory(
+        "Leave the bedroom and walk to the couch.",
+        subgoals=(
+            Subgoal("1", "Leave the bedroom", "The camera is outside the bedroom door."),
+            Subgoal("2", "Walk to the couch", "The couch is directly ahead."),
+        ),
+    )
+    # Model claims completion while its own door fields contradict it; the
+    # guards would defer, the ablation accepts it verbatim.
+    captioner = SceneCaptioner(lambda request: _scene_result(
+        request, completed=True, door_state="APPROACHING", door_camera_side="BEFORE_DOOR",
+    ))
+    memory = TemporalMemory(captioner=captioner, task_memory=task)
+    memory.set_motion_evidence(translation_m=0.0, yaw_delta_deg=0.0)
+    memory.append_observation(_frame(0))
+    assert memory.analyze().completed is True
