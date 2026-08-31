@@ -220,3 +220,14 @@ def test_stage_overrun_forces_a_preview_reorientation():
             previews += 1
     assert previews >= 1
     assert agent._overrun_count >= 1
+
+
+def test_shared_doorway_classifier_extends_recall_and_yields_to_turns():
+    from agentflow.agents.models_embodied_v2.skiils.protocol import stage_is_doorway
+
+    assert stage_is_doorway("Go through the door The camera has passed the door")
+    assert stage_is_doorway("Walk through the entryway ...")
+    assert stage_is_doorway("Enter the hallway on the right ...")
+    assert not stage_is_doorway("Turn left at the doorway The left hallway is centred")
+    assert not stage_is_doorway("Turn around and face the doorway ...")
+    assert not stage_is_doorway("Walk to the couch The couch is directly ahead")

@@ -178,6 +178,30 @@ TARGET_WALK_BUDGET_FACTOR = 2.0
 # "Turn around" is a rotation of about 180 degrees in either direction; the
 # stage is measured like a left/right turn but against this larger target.
 TURN_AROUND_MIN_PROGRESS_DEG = 150.0
+# One shared doorway-stage classifier for the captioner contract, the judge's
+# measured-crossing rule and the agent's doorway lock. Audit on 400 sampled
+# val_unseen stages (docs 2026-08-31): the old per-site regexes disagreed and
+# the captioner one missed 29% of true doorway stages ("Go through the door",
+# "entryway", "entrance"). A turn instruction wins over a doorway mention:
+# "Turn left at the doorway" is a rotation whose location happens to be a door.
+DOORWAY_STAGE_PATTERN = (
+    r"\b(?:doorways?|doors?|exit|leave|enter|entrance|entryway|arch(?:way)?|"
+    r"threshold|cross(?:ed|ing)?|out\s+of|walk\s+out|(?:go|walk|pass)\s+through)\b"
+)
+TURN_STAGE_PATTERN = r"\bturn\s+(?:left|right)\b"
+
+
+def stage_is_doorway(text: str) -> bool:
+    """Doorway-type stage: its completion is passing a structural opening."""
+    import re
+
+    if re.search(TURN_STAGE_PATTERN, text, flags=re.IGNORECASE):
+        return False
+    if re.search(TURN_AROUND_PATTERN, text, flags=re.IGNORECASE):
+        return False
+    return bool(re.search(DOORWAY_STAGE_PATTERN, text, flags=re.IGNORECASE))
+
+
 TURN_AROUND_PATTERN = (
     r"\b(?:turn\s+(?:all\s+the\s+way\s+)?(?:around|back|about)|about[- ]face|"
     r"turn\s+180|(?:do|make)\s+a\s+180|reverse\s+direction)\b"

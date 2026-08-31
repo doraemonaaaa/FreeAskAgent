@@ -591,9 +591,11 @@ class TemporalCaptioner:
     def _scene_content(self, request: SceneAnalysisRequest) -> list[Any]:
         doorway_stage = self._is_doorway_subgoal(request.subgoal)
         door_contract = (
-            "This is a DOORWAY subgoal. Door fields must not be "
-            "NOT_APPLICABLE. When the structural opening is visible, "
-            "landmark must locate that opening in the current image."
+            "This is a DOORWAY subgoal. Report the door fields for the "
+            "structural opening when one is visible, and locate that "
+            "opening with landmark; when no opening is visible in the "
+            "current image, NOT_VISIBLE door fields are the correct "
+            "answer -- never invent a door."
             if doorway_stage
             else (
                 "This is not a doorway subgoal. Use NOT_APPLICABLE for all "
@@ -639,13 +641,12 @@ class TemporalCaptioner:
 
     @staticmethod
     def _is_doorway_subgoal(subgoal: Subgoal) -> bool:
-        text = f"{subgoal.description} {subgoal.completion_criteria}"
-        return bool(
-            re.search(
-                r"\b(?:exit|leave|doorway|threshold|cross(?:ed|ing)?)\b",
-                text,
-                flags=re.IGNORECASE,
-            )
+        from agentflow.agents.models_embodied_v2.skiils.protocol import (
+            stage_is_doorway,
+        )
+
+        return stage_is_doorway(
+            f"{subgoal.description} {subgoal.completion_criteria}"
         )
 
     @staticmethod

@@ -40,6 +40,7 @@ from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
     STAGE_PATH_OVERRUN_M,
+    stage_is_doorway,
     BEHAVIOR_HISTORY_SIZE,
     COMMITTED_TARGET_REACHED_M,
     COMMITTED_TARGET_TOLERANCE_FRACTION,
@@ -1044,14 +1045,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if subgoal is None:
             return False
         return bool(
-            re.search(
-                # "Walk out of the bedroom into the hall" and "enter the
-                # room" are doorway crossings even though neither names the
-                # door itself.
-                r"\b(?:door|doorway|exit|threshold|cross|leave|enter|"
-                r"entrance|out\s+of|walk\s+out)\b",
-                f"{subgoal.description} {subgoal.completion_criteria}",
-                flags=re.IGNORECASE,
+            stage_is_doorway(
+                f"{subgoal.description} {subgoal.completion_criteria}"
             )
         )
 

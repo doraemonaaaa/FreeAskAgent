@@ -328,16 +328,14 @@ class CompletionMemoryMixin:
         """Text says this stage is about going through a door / leaving a room."""
         if subgoal is None:
             return False
-        text = "{} {}".format(
-            getattr(subgoal, "description", ""),
-            getattr(subgoal, "completion_criteria", ""),
+        from agentflow.agents.models_embodied_v2.skiils.protocol import (
+            stage_is_doorway,
         )
-        return bool(
-            re.search(
-                r"\b(?:door|doorway|exit|threshold|cross|leave|enter|"
-                r"entrance|out\s+of|walk\s+out)\b",
-                text,
-                flags=re.IGNORECASE,
+
+        return stage_is_doorway(
+            "{} {}".format(
+                getattr(subgoal, "description", ""),
+                getattr(subgoal, "completion_criteria", ""),
             )
         )
 
