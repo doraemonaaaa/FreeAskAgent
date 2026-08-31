@@ -25,6 +25,7 @@ import numpy as np
 
 from .candidates import Candidate, relabel
 from .landmarks import LandmarkRegistry, SpatialLandmark
+from .events import DoorwayCrossing, DoorwayCrossingDetector
 from .occupancy_grid import FREE, OCCUPIED, UNKNOWN, Frontier, OccupancyGrid, path_length_m
 from .targets import CommittedTarget
 
@@ -54,6 +55,9 @@ class SpatialMemory:
         self.yaw_deg: float = 0.0
         self.trail: list[tuple[float, float]] = []
         self.released_targets: list[CommittedTarget] = []
+        self.crossings: list[DoorwayCrossing] = []
+        self._crossing_confirmed_steps: list[int] = []
+        self._crossing_detector = DoorwayCrossingDetector()
         self._visited_frontiers: list[tuple[float, float]] = []
         self.last_path: Optional[list[tuple[float, float]]] = None
         self.last_release_reason: Optional[str] = None
@@ -144,6 +148,9 @@ class SpatialMemory:
         self._visited_frontiers.clear()
         self.last_path = None
         self.last_release_reason = None
+        self.crossings.clear()
+        self._crossing_confirmed_steps.clear()
+        self._crossing_detector.reset()
         self._nav_origin = None
         self._nav_mask = None
 
@@ -176,6 +183,21 @@ class SpatialMemory:
             self.target.update(
                 step=self.step, position_xz=self.position_xz, yaw_deg=self.yaw_deg
             )
+        event = self._crossing_detector.update(
+            step=self.step, grid=self.grid, trail=self.trail
+        )
+        if event is not None:
+            self.crossings.append(event)
+            self._crossing_confirmed_steps.append(self.step)
+
+    def crossing_detected_at(self, step: int) -> bool:
+        """True when a doorway crossing was confirmed on this observe step.
+
+        Confirmation lags the constriction itself by a few steps (the far
+        side must be walked first), so the event is keyed to the step whose
+        observation confirmed it, not the step at the narrowest point.
+        """
+        return step in self._crossing_confirmed_steps
 
     @property
     def position_xz(self) -> tuple[float, float]:
@@ -429,6 +451,17 @@ class SpatialMemory:
             except Exception:
                 continue
             image[max(row - 1, 0): row + 2, max(col - 1, 0): col + 2] = (255, 220, 0)
+        # Doorway-crossing events: a hollow magenta square at each measured
+        # constriction the trail passed through.
+        for crossing in self.crossings:
+            try:
+                row, col = self.grid.world_to_cell(*crossing.position_xz)
+            except Exception:
+                continue
+            for dr in range(-2, 3):
+                for dc in range(-2, 3):
+                    if max(abs(dr), abs(dc)) == 2 and self.grid.inside(row + dr, col + dc):
+                        image[row + dr, col + dc] = (200, 0, 200)
         # Heading tick: a short orange line from the agent in its facing
         # direction (forward = (sin yaw, -cos yaw) on the x/z plane).
         yaw = math.radians(self.yaw_deg)
@@ -452,7 +485,7 @@ class SpatialMemory:
         except TypeError:
             font = ImageFont.load_default()
         legend = [((255, 140, 0), "agent"), ((40, 90, 255), "trail"), ((0, 170, 0), "landmark"),
-                  ((230, 30, 30), "target"), ((255, 220, 0), "candidate"), ((0, 0, 0), "occupied"),
+                  ((230, 30, 30), "target"), ((255, 220, 0), "candidate"), ((200, 0, 200), "door event"), ((0, 0, 0), "occupied"),
                   ((255, 255, 255), "free"), ((128, 128, 128), "unknown")]
         y = size_px - max(14, size_px // 30)
         x = 4

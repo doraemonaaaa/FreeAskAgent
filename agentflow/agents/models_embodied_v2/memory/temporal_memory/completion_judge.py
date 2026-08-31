@@ -78,6 +78,8 @@ class CompletionMemoryMixin:
         self._last_completion_guard: Optional[str] = None
         self._doorway_approach_seen = False
         self._doorway_target_distance_m: Optional[float] = None
+        self._subgoal_net_yaw_deg = 0.0
+        self._measured_crossings: list[float] = []
         self._doorway_crossed_streak = 0
         self._doorway_reached = False
         self._doorway_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
@@ -131,6 +133,8 @@ class CompletionMemoryMixin:
         self._last_completion_guard = None
         if hasattr(self, "_subgoal_path_length_m"):
             self._subgoal_path_length_m = 0.0
+            self._subgoal_net_yaw_deg = 0.0
+            self._measured_crossings = []
         if hasattr(self, "_latest_scene"):
             self._latest_scene = None
         if hasattr(self, "_doorway_approach_seen"):
@@ -162,6 +166,8 @@ class CompletionMemoryMixin:
         new_id = self._subgoal.subgoal_id if self._subgoal else None
         if old_id != new_id:
             self._subgoal_path_length_m = 0.0
+            self._subgoal_net_yaw_deg = 0.0
+            self._measured_crossings = []
             self._latest_scene = None
             self._doorway_approach_seen = False
             self._doorway_target_distance_m = None
@@ -306,6 +312,35 @@ class CompletionMemoryMixin:
 
     set_committed_target_distance = set_doorway_target_distance
 
+    def set_doorway_crossing(self, crossed: bool) -> None:
+        """Record a map-measured doorway crossing confirmed this step.
+
+        The spatial memory fires this when the trail passed through a
+        door-width constriction separating two free regions. It is pure
+        geometry: on a doorway stage it can complete the stage the way
+        measured rotation completes a turn stage.
+        """
+        if crossed:
+            self._measured_crossings.append(self._subgoal_path_length_m)
+
+    @staticmethod
+    def _doorway_stage(subgoal: Any) -> bool:
+        """Text says this stage is about going through a door / leaving a room."""
+        if subgoal is None:
+            return False
+        text = "{} {}".format(
+            getattr(subgoal, "description", ""),
+            getattr(subgoal, "completion_criteria", ""),
+        )
+        return bool(
+            re.search(
+                r"\b(?:door|doorway|exit|threshold|cross|leave|enter|"
+                r"entrance|out\s+of|walk\s+out)\b",
+                text,
+                flags=re.IGNORECASE,
+            )
+        )
+
     def set_elevation_progress(self, rise_m: float) -> None:
         """Attach the camera's height change since the subgoal began."""
         self._elevation_history.append(float(rise_m))
@@ -387,6 +422,7 @@ class CompletionMemoryMixin:
     def append_observation(self, image: Any) -> MemoryFrame:
         frame = super().append_observation(image)
         self._subgoal_path_length_m += self._pending_translation_m
+        self._subgoal_net_yaw_deg += self._pending_yaw_delta_deg
         self._task_path_length_m += self._pending_translation_m
         annotated = replace(
             frame,
@@ -460,6 +496,28 @@ class CompletionMemoryMixin:
             self.task_memory, "get_final_subgoal", lambda: None
         )()
         self._subgoal_observations += 1
+        crossing_note = (
+            "crossed {} doorway-width constriction(s), the last after "
+            "{:.1f} m of this stage's walking".format(
+                len(self._measured_crossings), self._measured_crossings[-1]
+            )
+            if self._measured_crossings
+            else "no doorway crossing measured yet"
+        )
+        spatial_facts = (
+            "walked {:.1f} m, net heading change {:+.0f} deg; {}{}".format(
+                self._subgoal_path_length_m,
+                self._subgoal_net_yaw_deg,
+                crossing_note,
+                (
+                    "; committed target still {:.1f} m ahead".format(
+                        self._doorway_target_distance_m
+                    )
+                    if self._doorway_target_distance_m is not None
+                    else ""
+                ),
+            )
+        )
         scene = self.captioner.analyze_scene(
             SceneAnalysisRequest(
                 subgoal=self._subgoal,
@@ -468,6 +526,7 @@ class CompletionMemoryMixin:
                 final_subgoal=(
                     final_subgoal if isinstance(final_subgoal, Subgoal) else None
                 ),
+                spatial_facts=spatial_facts,
             )
         )
         self._latest_scene = scene
@@ -627,6 +686,18 @@ class CompletionMemoryMixin:
             self._doorway_crossed_streak >= DOORWAY_CROSSED_STREAK_ACCEPT
             and self._subgoal_path_length_m >= DOORWAY_CROSSED_MIN_PATH_M
         )
+        # A measured constriction crossing is to a doorway stage what net
+        # yaw is to a turn stage: the event itself is the completion
+        # criterion, and the map saw it happen. The model keeps a veto only
+        # through the committed point: while the point the actor committed
+        # to is still ahead, the crossed opening was some other gap.
+        measured_crossing_done = bool(
+            self._measured_crossings
+            and self._doorway_stage(self._subgoal)
+            and not is_final
+            and self._subgoal_path_length_m >= DOORWAY_CROSSED_MIN_PATH_M
+            and not committed_target_ahead
+        )
         # A turn stage ends when the rotation is done; the point committed
         # to during it belongs to the walk that follows, not to the turn.
         if turn_done:
@@ -656,6 +727,13 @@ class CompletionMemoryMixin:
             self._last_completion_guard = (
                 f"accepted measured stairs {stairs_direction}: height changed "
                 f"{rise:+.2f} m and levelled off"
+            )
+        elif measured_crossing_done:
+            completed = True
+            self._last_completion_guard = (
+                "accepted measured doorway crossing: the trail passed a "
+                "door-width constriction between two free regions after "
+                f"{self._measured_crossings[-1]:.1f} m of walking"
             )
         elif landmark_arrival:
             completed = True

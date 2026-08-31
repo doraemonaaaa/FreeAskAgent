@@ -619,6 +619,12 @@ class TemporalCaptioner:
             f"Frames: {len(request.frames)}, oldest first. The image after "
             f"the final metadata line is the CURRENT observation."
         ]
+        if request.spatial_facts:
+            content.append(
+                "Measured spatial facts for the active subgoal (odometry and "
+                "mapped geometry; these are measurements, trust them over "
+                "visual impressions): " + request.spatial_facts
+            )
         last_index = len(request.frames) - 1
         for index, frame in enumerate(request.frames):
             role = "CURRENT" if index == last_index else "HISTORICAL"

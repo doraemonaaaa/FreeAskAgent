@@ -268,6 +268,9 @@ class SceneAnalysisRequest:
     # The route's last stage, supplied on every stage so the observer can
     # report the final destination whenever it is in view.
     final_subgoal: Subgoal | None = None
+    # Odometry / mapped-geometry facts measured for the active stage, ready
+    # to print into the prompt. Measurement, not model output.
+    spatial_facts: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.subgoal, Subgoal):
