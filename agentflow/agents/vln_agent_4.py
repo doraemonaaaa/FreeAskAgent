@@ -1831,20 +1831,24 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                            cam_pos[2] - self._episode_start_xyz[2]))
             if self._episode_start_xyz is not None else 0.0
         )
-        allow_stop = travelled >= 1.0
+        allow_stop = (
+            travelled >= 1.0
+            and os.environ.get("VLN_SOM_STOP_CHANNEL", "0").lower()
+            not in ("", "0", "false", "off", "no")
+        )
         if allow_stop:
-            # Bare STOP channel grafted from the pano-hop chooser (measured
-            # 60% SR/oracle conversion vs the judge path's 30% on cwp200).
+            # ABLATION ONLY (VLN_SOM_STOP_CHANNEL=1, default off). Measured
+            # on ep146: a stalled stage tracker structurally suppresses this
+            # vote (docs §23.2); the production stop path stays the original
+            # actor-proposes / judge-disposes machinery in skiils/waypoint.py.
             listing = listing + (
                 "\n  S: STOP here: the FULL route instruction is complete and "
-                "this is the final described location")
+                "this is the final described location\n"
+                'When S is listed, {"choice":"S"} is also a valid reply; choose '
+                "it ONLY if the whole instruction is done and you are standing "
+                "at the final described location.")
         text = "\n".join((
-            # De-biased for the S vote: the stage tracker can lag far behind
-            # (measured: subgoal 3/6 while standing 0.09 m from the goal), so
-            # the counter is withheld and the model judges completion against
-            # the full instruction.
-            (f"Active subgoal (the tracker may lag true progress): {current.description}"
-             if current is not None else "All subgoals are complete."),
+            self.task_memory.current_subgoal_context() if self.task_memory else "",
             f"Full route instruction: {self.task_instruction}",
             f"Required navigation phase: {self._navigation_phase}.",
             self._landmark_context_for_waypoint(current),
