@@ -186,6 +186,24 @@ class TaskMemory:
 
         self.record_event(kind, str(value))
 
+    def has_next_subgoal(self) -> bool:
+        return self._current_subgoal_index < len(self._subgoals) - 1
+
+    def force_advance(self, reason: str) -> bool:
+        """Advance past a stalled subgoal (stage watchdog).
+
+        Never advances past the final subgoal: completing that one is the
+        episode's stop condition and stays with the judge.
+        """
+        current = self.get_current_subgoal()
+        if current is None or not self.has_next_subgoal():
+            return False
+        self.subgoal_completion_status = (
+            f"Subgoal {current.subgoal_id}: COMPLETE (forced: {reason})")
+        self.record_event("SUBGOAL_FORCED", self.subgoal_completion_status)
+        self._current_subgoal_index += 1
+        return True
+
     def record_input(self, observation: Any) -> None:
         self.latest_input = TaskInput(
             observation=observation,

@@ -43,6 +43,7 @@ from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import
 )
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
+    STAGE_FORCE_ADVANCE_WALK_M,
     STAGE_PATH_OVERRUN_M,
     stage_is_doorway,
     BEHAVIOR_HISTORY_SIZE,
@@ -365,6 +366,28 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._update_preview_progress()
             self._update_recovery_progress(translation_m)
             self._subgoal_walked_m += float(translation_m)
+            if (
+                self._subgoal_walked_m > STAGE_FORCE_ADVANCE_WALK_M
+                and self.task_memory is not None
+                and current is not None
+                and self.task_memory.has_next_subgoal()
+            ):
+                # Stage watchdog: this much walking without completion means
+                # the tracker is stalled, and its stale stage text poisons
+                # SoM choices, landmark targets and every STOP path (§23.2).
+                if self.task_memory.force_advance(
+                    "walked {:.1f} m without completing".format(
+                        self._subgoal_walked_m)
+                ):
+                    print("STAGE_WATCHDOG advanced past subgoal {} after "
+                          "{:.1f} m".format(current.subgoal_id,
+                                            self._subgoal_walked_m),
+                          file=sys.stderr, flush=True)
+                    current = self.task_memory.get_current_subgoal()
+                    self.last_subgoal_before = (
+                        current.subgoal_id if current is not None else None
+                    )
+                    self._sync_navigation_phase(current)
             self._record_behavior(
                 subgoal_id=self.last_subgoal_before,
                 translation_m=translation_m,

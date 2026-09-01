@@ -171,6 +171,13 @@ TURN_MIN_PROGRESS_DEG = 60.0
 # A stage that has cost this many walked metres without completing is being
 # pursued in the wrong direction: drop the committed target and look around.
 STAGE_PATH_OVERRUN_M = 10.0
+
+# Stage watchdog: a subgoal that has accumulated this much walking without
+# completing is stalled (measured: ep146 walked 7.6+ m on subgoal 1/6 while
+# the captioner kept "landmark not visible"; the stale stage text then
+# poisons SoM choices, landmark targets and every STOP path - docs §23.2).
+# Forced advancement never applies to the final subgoal.
+STAGE_FORCE_ADVANCE_WALK_M = float(os.environ.get("VLN_STAGE_FORCE_ADVANCE_M", "12.0"))
 # One committed target may cost at most max(MIN, FACTOR x its initial
 # distance) of walking before it is released as an overrun.
 TARGET_WALK_BUDGET_MIN_M = 4.0
