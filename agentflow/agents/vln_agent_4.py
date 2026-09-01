@@ -11,6 +11,7 @@ import time
 from typing import Any, Deque, Optional, Sequence
 
 import math
+import sys
 import numpy as np
 
 from agentflow.agents.models_embodied_v2.actor import Actor
@@ -197,6 +198,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     def _reset_runtime_state(self) -> None:
         """Clear all episode-local navigation and debug state."""
         self._external_candidates: Optional[list] = None
+        self._episode_start_xyz = None
         self.last_subgoal_before: Optional[str] = None
         self.last_subgoal_after: Optional[str] = None
         self.last_requested_pixel: Optional[tuple[int, int]] = None
@@ -316,6 +318,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # Externally supplied (runner-side CWP) waypoint candidates for this
         # step; when present they replace the floor-openings generator.
         self._external_candidates = list(cwp_candidates) if cwp_candidates else None
+        if self._episode_start_xyz is None:
+            self._episode_start_xyz = np.asarray(
+                camera_to_world, dtype=np.float64)[:3, 3].copy()
         if navigable_window is not None and self.use_spatial_memory:
             try:
                 self.spatial_memory.set_traversability(
@@ -1820,8 +1825,26 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         annotated = annotate_image(image, candidates)
         self.last_som_image = annotated
         listing = describe_candidates(candidates)
+        cam_pos = np.asarray(camera_to_world, dtype=np.float64)[:3, 3]
+        travelled = (
+            float(np.hypot(cam_pos[0] - self._episode_start_xyz[0],
+                           cam_pos[2] - self._episode_start_xyz[2]))
+            if self._episode_start_xyz is not None else 0.0
+        )
+        allow_stop = travelled >= 1.0
+        if allow_stop:
+            # Bare STOP channel grafted from the pano-hop chooser (measured
+            # 60% SR/oracle conversion vs the judge path's 30% on cwp200).
+            listing = listing + (
+                "\n  S: STOP here: the FULL route instruction is complete and "
+                "this is the final described location")
         text = "\n".join((
-            self.task_memory.current_subgoal_context() if self.task_memory else "",
+            # De-biased for the S vote: the stage tracker can lag far behind
+            # (measured: subgoal 3/6 while standing 0.09 m from the goal), so
+            # the counter is withheld and the model judges completion against
+            # the full instruction.
+            (f"Active subgoal (the tracker may lag true progress): {current.description}"
+             if current is not None else "All subgoals are complete."),
             f"Full route instruction: {self.task_instruction}",
             f"Required navigation phase: {self._navigation_phase}.",
             self._landmark_context_for_waypoint(current),
@@ -1860,6 +1883,22 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 response_text = str(response)
                 payload = self._extract_json_object(response_text)
                 choice = str(payload.get("choice", "")).strip().upper()
+                if allow_stop and choice in ("S", "STOP"):
+                    self.last_som_choice = "S"
+                    self.last_som_raw_response = response_text
+                    self.last_model_response = response_text
+                    self.last_waypoint_raw_response = response_text
+                    self.last_waypoint_confidence = float(payload.get("confidence") or 0.0)
+                    self.last_waypoint_evidence = str(payload.get("evidence") or "")
+                    self.last_waypoint_stop_disposition = "som stop vote"
+                    self.last_waypoint_model_action_mode = "EXECUTION"
+                    self.last_waypoint_applied_action_mode = "EXECUTION"
+                    self._final_stop_evidence.append(True)
+                    return NavigationDecision(
+                        stop=True,
+                        raw_response=response_text,
+                        action_mode="EXECUTION",
+                    )
                 if choice in labels:
                     chosen = labels[choice]
                     self.last_waypoint_confidence = float(payload.get("confidence") or 0.0)
@@ -1870,6 +1909,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_som_raw_response = response_text
         self.last_model_response = response_text
         self.last_waypoint_raw_response = response_text
+        if os.environ.get("VLN_SOM_TRACE"):
+            print("SOM_TRACE travelled={:.1f} allow_stop={} raw={}".format(
+                travelled, allow_stop, response_text[:300]),
+                file=sys.stderr, flush=True)
         if chosen is None:
             self.last_som_error = self.last_som_error or "reply was not a listed label"
             return None

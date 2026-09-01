@@ -118,11 +118,15 @@ instruction:
 - in a corridor or hallway stage keep the corridor, do not enter side rooms;
 - choose L, R or B only when no marker in view can lead where the route
   goes (a blind corner, a turn the instruction asks for, a dead end);
+- choose S, when listed, ONLY if the FULL route instruction is already
+  complete and the agent is standing at the final described location; judge
+  this against the whole instruction, even if the active subgoal text
+  suggests more remains;
 - never choose a marker the instruction tells you to move away from.
 
 Reply with exactly one single-line JSON object; angle brackets are values you
 fill in, not placeholders to copy:
-{"choice":"<marker number, or L, R, B>","confidence":<float 0-1>,"evidence":"<at most 20 words>"}
+{"choice":"<marker number, or L, R, B, or S when listed>","confidence":<float 0-1>,"evidence":"<at most 20 words>"}
 confidence is your own probability that this choice follows the route: about
 0.9 when obvious, 0.5 when two options compete, 0.2 when guessing."""
 # A doorway completion is normally released by geometry (the camera reached
