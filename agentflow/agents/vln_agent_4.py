@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Deque, Optional, Sequence
 
+import math
 import numpy as np
 
 from agentflow.agents.models_embodied_v2.actor import Actor
@@ -35,7 +36,9 @@ from agentflow.agents.models_embodied_v2.memory.spatial_memory import (
     generate_candidates,
 )
 from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import (
+    Candidate,
     encode_png,
+    project_to_pixel,
 )
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
@@ -193,6 +196,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
 
     def _reset_runtime_state(self) -> None:
         """Clear all episode-local navigation and debug state."""
+        self._external_candidates: Optional[list] = None
         self.last_subgoal_before: Optional[str] = None
         self.last_subgoal_after: Optional[str] = None
         self.last_requested_pixel: Optional[tuple[int, int]] = None
@@ -295,6 +299,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         depth_max_m: Optional[float] = None,
         navigable_window: Optional[dict[str, Any]] = None,
         oracle_goal_xyz: Optional[Sequence[float]] = None,
+        cwp_candidates: Optional[Sequence[dict]] = None,
     ) -> NavigationDecision:
         """Run one step while retaining state transitions for debug output.
 
@@ -308,6 +313,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             tuple(float(v) for v in oracle_goal_xyz)
             if oracle_goal_xyz is not None else None
         )
+        # Externally supplied (runner-side CWP) waypoint candidates for this
+        # step; when present they replace the floor-openings generator.
+        self._external_candidates = list(cwp_candidates) if cwp_candidates else None
         if navigable_window is not None and self.use_spatial_memory:
             try:
                 self.spatial_memory.set_traversability(
@@ -1683,6 +1691,49 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._som_llm_name = name
         return self._som_llm
 
+    def _candidates_from_external(
+        self,
+        external: Sequence[dict],
+        *,
+        intrinsics: CameraIntrinsics,
+        camera_to_world: Any,
+        image_shape: tuple[int, int],
+    ) -> list:
+        """Build Candidate objects from runner-supplied CWP waypoints.
+
+        Keeps the exact contract generate_candidates has downstream: non-turn
+        kinds count as in-view candidates, get relabeled 1..N left-to-right,
+        and the L/R/B turn escape hatches are appended unchanged.
+        """
+        cam = np.asarray(camera_to_world, dtype=np.float64)
+        cam_pos = cam[:3, 3]
+        out = []
+        for entry in list(external)[:SOM_MAX_CANDIDATES]:
+            world = tuple(float(v) for v in entry["world_xyz"])
+            dist = float(math.hypot(world[0] - cam_pos[0], world[2] - cam_pos[2]))
+            uv = entry.get("pixel_uv")
+            if uv is None:
+                try:
+                    uv = project_to_pixel(world, intrinsics, camera_to_world, image_shape)
+                except Exception:
+                    uv = None
+            out.append(Candidate(
+                "",
+                world,
+                dist,
+                float(entry.get("bearing_deg", 0.0)),
+                "opening",
+                tuple(int(v) for v in uv) if uv is not None else None,
+                entry.get("note") or "walkable opening about {:.1f} m away".format(dist),
+            ))
+        for lab, note in (("L", "turn left: area outside the current view"),
+                          ("R", "turn right: area outside the current view"),
+                          ("B", "turn around: the way back")):
+            out.append(Candidate(lab, (0.0, 0.0, 0.0), 0.0,
+                                 {"L": -90.0, "R": 90.0, "B": 180.0}[lab],
+                                 "turn", None, note))
+        return out
+
     def _som_decision(
         self,
         current: Optional[Subgoal],
@@ -1724,22 +1775,33 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             else CameraIntrinsics.from_matrix(intrinsics)
         )
         try:
-            landmark = memory.landmark_for_subgoal(current.subgoal_id)
-            candidates = generate_candidates(
-                depth_m=depth_m,
-                floor_mask=self._current_floor_mask,
-                intrinsics=calibration,
-                camera_to_world=camera_to_world,
-                image_shape=image.shape[:2],
-                frontiers=memory.frontiers(),
-                landmark_xyz=landmark.world_xyz if landmark is not None else None,
-                landmark_note=(
-                    f"the active subgoal's landmark ({current.description})"
-                    if landmark is not None else ""
-                ),
-                floor_y=memory.floor_y if memory.position is not None else None,
-                max_in_view=SOM_MAX_CANDIDATES,
-            )
+            if self._external_candidates:
+                # Runner-side CWP candidates replace floor-openings; the
+                # navmesh filter, relabeling, SoM drawing, prompting and
+                # target commitment downstream stay unchanged.
+                candidates = self._candidates_from_external(
+                    self._external_candidates,
+                    intrinsics=calibration,
+                    camera_to_world=camera_to_world,
+                    image_shape=image.shape[:2],
+                )
+            else:
+                landmark = memory.landmark_for_subgoal(current.subgoal_id)
+                candidates = generate_candidates(
+                    depth_m=depth_m,
+                    floor_mask=self._current_floor_mask,
+                    intrinsics=calibration,
+                    camera_to_world=camera_to_world,
+                    image_shape=image.shape[:2],
+                    frontiers=memory.frontiers(),
+                    landmark_xyz=landmark.world_xyz if landmark is not None else None,
+                    landmark_note=(
+                        f"the active subgoal's landmark ({current.description})"
+                        if landmark is not None else ""
+                    ),
+                    floor_y=memory.floor_y if memory.position is not None else None,
+                    max_in_view=SOM_MAX_CANDIDATES,
+                )
         except Exception as exc:
             self.last_som_error = f"{type(exc).__name__}: {exc}"
             return None
