@@ -367,7 +367,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._update_recovery_progress(translation_m)
             self._subgoal_walked_m += float(translation_m)
             if (
-                self._subgoal_walked_m > STAGE_FORCE_ADVANCE_WALK_M
+                STAGE_FORCE_ADVANCE_WALK_M > 0
+                and self._subgoal_walked_m > STAGE_FORCE_ADVANCE_WALK_M
                 and self.task_memory is not None
                 and current is not None
                 and self.task_memory.has_next_subgoal()
