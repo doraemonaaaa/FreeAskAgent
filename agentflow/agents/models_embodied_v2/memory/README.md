@@ -25,17 +25,14 @@ through `TaskMemory.publish_temporal_event()`.
 
 ## Episode reset
 
-Use the unified episode-reset entry point so both memories reset in one call:
+Reset Task Memory first, then Temporal Memory (this is what
+`VLNAgent.reset_memory()` does):
 
 ```python
-temporal_memory.reset_episode(
-    goal=instruction,
-    task_guidance=guidance,
-    subgoals=subgoals,
-)
+task_memory.reset(goal=instruction, subgoals=subgoals)
+temporal_memory.reset()
 ```
 
-This calls `TaskMemory.reset()` and `TemporalMemory.reset()` together. Every
-Task Memory reset also increments `get_reset_generation()`. Temporal Memory
+Every Task Memory reset increments `get_reset_generation()`. Temporal Memory
 checks that generation before every update and public read, so even a direct
 Task Memory reset cannot expose stale frames from the previous episode.

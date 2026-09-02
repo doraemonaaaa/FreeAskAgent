@@ -468,7 +468,7 @@ def test_localized_landmark_overrides_model_turn_with_floor_waypoint():
     assert decision.point.pixel_uv[0] == round(760 * 31 / 1000)
     assert abs(decision.point.world_xyz[1]) <= agent.actor.max_floor_offset_m
     # A verified floor point beneath a doorway becomes the locked target.
-    assert agent._doorway_waypoint is decision.point
+    assert agent._landmark_waypoint is decision.point
 
 
 def test_model_turn_is_kept_when_no_landmark_is_localized():
@@ -516,7 +516,7 @@ def test_off_floor_point_is_not_locked_as_doorway():
 
     assert decision.point is not None
     assert decision.point.on_floor is False
-    assert agent._doorway_waypoint is None
+    assert agent._landmark_waypoint is None
     assert "not locked" in agent.last_waypoint_guard_reason
 
 
@@ -666,7 +666,7 @@ def test_final_stage_is_final_approach_and_never_locks_a_landmark():
     camera_to_world[1, 3] = 1.25
     agent.act(np.zeros((24, 32, 3), dtype=np.uint8), _room_depth(), "stop before pool.", intrinsics, camera_to_world)
     assert agent._navigation_phase == "FINAL_APPROACH"
-    assert agent._doorway_waypoint is None
+    assert agent._landmark_waypoint is None
 
 
 def test_spin_release_keeps_committed_point_as_judge_evidence():
@@ -680,19 +680,19 @@ def test_spin_release_keeps_committed_point_as_judge_evidence():
         pixel_uv=(0, 0), depth_m=4.0, camera_xyz=(0.0, 0.0, -4.0),
         world_xyz=(0.0, 0.0, -4.0), on_floor=True,
     )
-    agent._doorway_waypoint = point
-    agent._doorway_waypoint_subgoal_id = current.subgoal_id
-    agent._doorway_waypoint_reach_tolerance_m = 1.0
+    agent._landmark_waypoint = point
+    agent._landmark_waypoint_subgoal_id = current.subgoal_id
+    agent._landmark_waypoint_reach_tolerance_m = 1.0
 
-    agent._clear_doorway_waypoint(keep_for_judge=True)
-    assert agent._doorway_waypoint is None
+    agent._clear_landmark_waypoint(keep_for_judge=True)
+    assert agent._landmark_waypoint is None
     camera_to_world = np.eye(4)
     camera_to_world[1, 3] = 1.25
-    assert agent._doorway_target_distance(current, camera_to_world=camera_to_world) == 4.0
+    assert agent._landmark_target_distance(current, camera_to_world=camera_to_world) == 4.0
     assert agent._judge_target_tolerance(current) == 1.0
 
-    agent._clear_doorway_waypoint()
-    assert agent._doorway_target_distance(current, camera_to_world=camera_to_world) is None
+    agent._clear_landmark_waypoint()
+    assert agent._landmark_target_distance(current, camera_to_world=camera_to_world) is None
 
 
 SCENE_SOFA_CENTRED = SCENE_DOOR_VISIBLE_RIGHT.replace('"u":760,"v":640', '"u":520,"v":640').replace(
@@ -739,7 +739,7 @@ def test_visible_landmark_ends_the_turn_and_is_walked_to_not_turned_toward():
     assert first.turn_deg is None and first.point is not None
     assert agent.last_requested_normalized == (520, 640)
     # The located landmark is committed during the turn stage as well.
-    assert agent._doorway_waypoint is not None
+    assert agent._landmark_waypoint is not None
     # The prompt no longer demands a turn once the landmark is in view.
     waypoint_prompt = engine.calls[-1][1][0]
     assert "requested turn is satisfied" in waypoint_prompt
@@ -802,7 +802,7 @@ def test_captioner_selected_preview_target_is_locked_until_reached():
     )
     committed = agent.act_on_preview(views, instruction)
     assert committed.point is not None
-    assert agent._doorway_waypoint is committed.point
+    assert agent._landmark_waypoint is committed.point
     assert abs(agent._waypoint_bearing_deg(
         committed.point, camera_to_world=np.eye(4)
     )) > 45.0
@@ -843,23 +843,23 @@ def test_reached_locked_waypoint_is_released_and_does_not_rearm():
         pixel_uv=(0, 0), depth_m=3.0,
         camera_xyz=(0.0, 0.0, -3.0), world_xyz=(0.0, 0.0, -3.0),
     )
-    agent._doorway_waypoint = point
-    agent._doorway_waypoint_subgoal_id = current.subgoal_id
-    agent._doorway_waypoint_reach_tolerance_m = 0.75
+    agent._landmark_waypoint = point
+    agent._landmark_waypoint_subgoal_id = current.subgoal_id
+    agent._landmark_waypoint_reach_tolerance_m = 0.75
 
     far = np.eye(4)
-    assert agent._locked_doorway_decision(current, camera_to_world=far) is not None
+    assert agent._locked_landmark_decision(current, camera_to_world=far) is not None
 
     # Within tolerance: control is handed back and the point is kept only as
     # judge evidence.
     near = np.eye(4)
     near[2, 3] = -2.5
-    assert agent._locked_doorway_decision(current, camera_to_world=near) is None
-    assert agent._doorway_waypoint is None
+    assert agent._locked_landmark_decision(current, camera_to_world=near) is None
+    assert agent._landmark_waypoint is None
     assert agent._judge_target_point is point
 
     # Drifting past the tolerance again must not revive the old target.
-    assert agent._locked_doorway_decision(current, camera_to_world=far) is None
+    assert agent._locked_landmark_decision(current, camera_to_world=far) is None
 
 
 def test_final_stop_vote_requires_measured_near_range():
@@ -1115,8 +1115,8 @@ def test_located_landmark_is_walked_to_and_locked_instead_of_asking_set_of_mark(
     assert labels == ["plan", "scene"]  # neither set-of-mark nor the pixel path
     target = agent.spatial_memory.target
     assert target is not None and target.kind == "landmark"
-    assert agent._doorway_waypoint is not None  # locked for the completion judge
-    assert agent._doorway_waypoint.world_xyz == pytest.approx(target.world_xyz, abs=1e-6)
+    assert agent._landmark_waypoint is not None  # locked for the completion judge
+    assert agent._landmark_waypoint.world_xyz == pytest.approx(target.world_xyz, abs=1e-6)
     assert decision.point is not None
     assert "walking to the floor beneath the located landmark" in agent.last_waypoint_guard_reason
 

@@ -17,6 +17,7 @@ import numpy as np
 from agentflow.agents.models_embodied_v2.actor import Actor
 from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
     TemporalCaptioner,
+    TemporalMemory,
 )
 from agentflow.agents.models_embodied_v2.data_models import (
     ActionMode,
@@ -43,23 +44,18 @@ from agentflow.agents.models_embodied_v2.memory.spatial_memory.candidates import
 )
 
 from agentflow.agents.models_embodied_v2.skiils.protocol import (
-    STAGE_FORCE_ADVANCE_WALK_M,
     STAGE_PATH_OVERRUN_M,
     stage_is_doorway,
     BEHAVIOR_HISTORY_SIZE,
     COMMITTED_TARGET_REACHED_M,
     COMMITTED_TARGET_TOLERANCE_FRACTION,
     COMMITTED_TARGET_TOLERANCE_MAX_M,
-    CORRIDOR_LOCK_FORWARD_STEPS,
     DEFAULT_MODEL_PATH,
-    ERROR_CONFIRMATION_WINDOW,
-    FINAL_STOP_EVIDENCE_WINDOW,
     LANDMARK_HISTORY_SIZE,
     LANDMARK_STEER_MIN_CONFIDENCE,
     NavigationIntent,
-    POINT_PROMPT,
     LOCKED_TARGET_TURN_TOLERANCE_DEG,
-    PREVIEW_REARM_TRANSLATION_M,
+    MAX_TURN_DEG,
     PREVIEW_SELECTION_MIN_CONFIDENCE,
     STALL_EVIDENCE_FRAMES,
     RECOVERY_LATERAL_DISTANCE_M,
@@ -74,7 +70,6 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     SOM_MAX_TARGET_DISTANCE_M,
     SOM_PROMPT,
     SOM_TARGET_MAX_AGE_STEPS,
-    SOM_TURN_DEG,
     SPATIAL_TARGET_MAX_AGE_STEPS,
     SPATIAL_TARGET_MIN_COMMIT_M,
     SPATIAL_TARGET_STAGNATION_STEPS,
@@ -88,15 +83,12 @@ from agentflow.agents.models_embodied_v2.skiils.protocol import (
     TURN_TARGET_CENTRED_U,
     TURN_TARGET_MIN_PROGRESS_DEG,
     LandmarkOutput as _LandmarkOutput,
-    WaypointOutput as _WaypointOutput,
 )
 from agentflow.agents.models_embodied_v2.skiils.planning import parse_subgoal_plan
 from agentflow.agents.models_embodied_v2.skiils.landmark import LandmarkTrackerMixin
 from agentflow.agents.models_embodied_v2.skiils.waypoint import WaypointPolicyMixin
 
-from agentflow.agents.models_embodied_v2.memory.temporal_memory import (
-    TemporalMemory,
-)
+
 class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     """Version 3 actor used by the Habitat waypoint worker."""
 
@@ -173,7 +165,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
 
         self.task_instruction: Optional[str] = None
         self.subgoals: list[Subgoal] = []
-        self.last_subgoal_response: Optional[str] = None
 
         self.task_memory = task_memory
         if temporal_memory is not None and task_memory is None:
@@ -187,12 +178,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         )
         self._behavior_history: Deque[dict[str, Any]] = deque(
             maxlen=BEHAVIOR_HISTORY_SIZE
-        )
-        self._error_candidates: Deque[str] = deque(
-            maxlen=ERROR_CONFIRMATION_WINDOW
-        )
-        self._final_stop_evidence: Deque[bool] = deque(
-            maxlen=FINAL_STOP_EVIDENCE_WINDOW
         )
         self._reset_runtime_state()
 
@@ -219,11 +204,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_preview_yaw_deg: Optional[float] = None
         self.last_preview_selection: Optional[PreviewSelection] = None
         self.last_preview_guard_reason: Optional[str] = None
-        # A preview stays consumed at this physical position until the camera
-        # has made real translational progress. Rotation alone must not re-arm
-        # another relative-heading preview.
-        self._preview_requires_progress = False
-        self._preview_anchor_position_xz: Optional[np.ndarray] = None
         self.last_waypoint_guard_reason: Optional[str] = None
         self.last_waypoint_evidence: Optional[str] = None
         self.last_waypoint_confidence: Optional[float] = None
@@ -236,43 +216,33 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_landmark_normalized: Optional[tuple[int, int]] = None
         self.last_landmark_pixel: Optional[tuple[int, int]] = None
         self._landmark_subgoal_id: Optional[str] = None
-        self._error_candidate_subgoal: Optional[str] = None
-        self._active_recovery_mode: Optional[str] = None
-        self._recovery_progress_m = 0.0
-        self._recovery_attempt_steps = 0
-        self._recovery_anchor_position_xz: Optional[np.ndarray] = None
-        self._force_forward_this_step = False
         self._force_left_turn_this_step = False
         self._previous_position: Optional[np.ndarray] = None
         self._previous_yaw_deg: Optional[float] = None
         self._navigation_subgoal_id: Optional[str] = None
         self._navigation_phase: NavigationIntent = "FOLLOW_CORRIDOR"
-        self._corridor_forward_streak = 0
-        self._corridor_heading_yaw_deg: Optional[float] = None
         self._subgoal_net_yaw_deg = 0.0
         self._subgoal_walked_m = 0.0
         self._overrun_fired_at_m = 0.0
         self._force_preview_this_step = False
         self._overrun_count = 0
         self._turn_follow_phase_started = False
-        # A model-localized doorway is a stable physical target. Keep its
-        # world-space waypoint across steps instead of letting independent VLM
-        # calls move the target around while the follower is routing around
-        # furniture toward the opening.
-        self._doorway_waypoint: Optional[NavigationPoint] = None
-        self._doorway_waypoint_subgoal_id: Optional[str] = None
-        # Stage whose located final target has already been committed to
-        # once before a STOP vote was allowed.
-        self._final_commit_subgoal_id: Optional[str] = None
+        # A model-localized landmark (a doorway, an object, or a heading the
+        # Captioner picked from the surrounding views) is a stable physical
+        # target. Keep its world-space waypoint across steps instead of
+        # letting independent VLM calls move the target around while the
+        # follower is routing around furniture toward it.
+        self._landmark_waypoint: Optional[NavigationPoint] = None
+        self._landmark_waypoint_subgoal_id: Optional[str] = None
         # Bearing to the locked target over the same window the motion
         # grounding inspects, so a same-sign rotation can be told apart from a
         # spin by whether the target was still off-axis while it happened.
-        self._doorway_waypoint_bearing_history: Deque[float] = deque(
+        self._landmark_waypoint_bearing_history: Deque[float] = deque(
             maxlen=STALL_EVIDENCE_FRAMES
         )
-        self._doorway_waypoint_best_distance_m: Optional[float] = None
-        self._doorway_waypoint_stagnant_steps = 0
-        self._doorway_waypoint_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
+        self._landmark_waypoint_best_distance_m: Optional[float] = None
+        self._landmark_waypoint_stagnant_steps = 0
+        self._landmark_waypoint_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
         self._steps_since_scene_analysis = 0
         self._scene_analysis_subgoal_id: Optional[str] = None
         self._spatial_step = -1
@@ -286,8 +256,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._subgoal_start_y: Optional[float] = None
         self._landmark_history.clear()
         self._behavior_history.clear()
-        self._error_candidates.clear()
-        self._final_stop_evidence.clear()
 
     def act(
         self,
@@ -331,12 +299,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 )
             except Exception as exc:
                 self.last_spatial_error = f"{type(exc).__name__}: {exc}"
-        # These flags describe only the waypoint selected during this call.
-        # A recovery selection may set one of them below; clear both before
-        # delegating to the RGB-D layer so a completed recovery cannot leak
-        # into later model-selected waypoints.
-        self._force_forward_this_step = False
+        # This flag describes only the waypoint selected during this call.
         self._force_left_turn_this_step = False
+        self.last_recovery_mode = None
         self.last_som_image = None
         # Only the step resolved from surrounding views reports a previewed
         # view; leaving these set would tag every later step (and video
@@ -363,32 +328,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             camera_to_world
         )
         if had_previous_pose:
-            self._update_preview_progress()
-            self._update_recovery_progress(translation_m)
             self._subgoal_walked_m += float(translation_m)
-            if (
-                STAGE_FORCE_ADVANCE_WALK_M > 0
-                and self._subgoal_walked_m > STAGE_FORCE_ADVANCE_WALK_M
-                and self.task_memory is not None
-                and current is not None
-                and self.task_memory.has_next_subgoal()
-            ):
-                # Stage watchdog: this much walking without completion means
-                # the tracker is stalled, and its stale stage text poisons
-                # SoM choices, landmark targets and every STOP path (§23.2).
-                if self.task_memory.force_advance(
-                    "walked {:.1f} m without completing".format(
-                        self._subgoal_walked_m)
-                ):
-                    print("STAGE_WATCHDOG advanced past subgoal {} after "
-                          "{:.1f} m".format(current.subgoal_id,
-                                            self._subgoal_walked_m),
-                          file=sys.stderr, flush=True)
-                    current = self.task_memory.get_current_subgoal()
-                    self.last_subgoal_before = (
-                        current.subgoal_id if current is not None else None
-                    )
-                    self._sync_navigation_phase(current)
             self._record_behavior(
                 subgoal_id=self.last_subgoal_before,
                 translation_m=translation_m,
@@ -397,10 +337,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
             self._update_navigation_progress(
                 current,
-                yaw_delta_deg=yaw_delta_deg,
-            )
-            self._update_corridor_lock(
-                translation_m=translation_m,
                 yaw_delta_deg=yaw_delta_deg,
             )
         self._spatial_step += 1
@@ -417,8 +353,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 translation_m=translation_m,
                 yaw_delta_deg=yaw_delta_deg,
             )
-            self.temporal_memory.set_doorway_target_distance(
-                self._doorway_target_distance(
+            self.temporal_memory.set_landmark_target_distance(
+                self._landmark_target_distance(
                     current,
                     camera_to_world=camera_to_world,
                 ),
@@ -431,8 +367,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self.temporal_memory.set_turn_progress(
                 self._turn_progress_deg(current)
             )
-            # Still the previous step's value here: ``_select_pixel`` clears
-            # it later in this same step.
+            # Still the previous step's value here: the decision below
+            # resets it later in this same step.
             self.temporal_memory.set_stop_proposed(
                 self.last_waypoint_stop_disposition is not None
             )
@@ -493,26 +429,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 action_mode="EXECUTION",
             )
         if (
-            self._force_forward_this_step
-            and not decision.stop
-            and decision.point is not None
-        ):
-            transform = np.asarray(camera_to_world, dtype=np.float64)
-            decision = replace(
-                decision,
-                point=replace(
-                    decision.point,
-                    world_xyz=(
-                        float(transform[0, 3]),
-                        decision.point.world_xyz[1],
-                        float(transform[2, 3]),
-                    ),
-                ),
-                raw_response=(
-                    f"{decision.raw_response}; force-forward waypoint"
-                ),
-            )
-        elif (
             self._force_left_turn_this_step
             and not decision.stop
             and decision.point is not None
@@ -594,11 +510,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
         # A previewed step selects a fresh action, so no forced primitive from
         # the first half may leak into it.
-        self._force_forward_this_step = False
         self._force_left_turn_this_step = False
-        view_transform = np.asarray(views[0].camera_to_world, dtype=np.float64)
-        self._preview_requires_progress = True
-        self._preview_anchor_position_xz = view_transform[[0, 2], 3].copy()
 
         preview_select_started = time.perf_counter()
         view_index = self._selected_preview_view(views)
@@ -628,35 +540,46 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 height=image.shape[0],
             )
         else:
-            self._select_pixel(
-                image,
-                instruction,
-                subgoal_context=(
-                    self.task_memory.current_subgoal_context()
-                    if self.task_memory is not None
-                    else ""
-                ),
-                # All three constrain this second pass within one step: the
-                # error votes and recovery hold were already consumed by
-                # ``act``, the surrounding views are already in hand, and a
-                # turn would be measured against the agent's real facing
-                # rather than the rotated preview view.
-                evaluate_recovery=False,
-                allow_preview=False,
-                allow_turn=False,
+            # The selector declined or was unsure. Commit to the safe
+            # lower-centre floor point of the view chosen above (the most
+            # forward one when nothing was selected).
+            intent: NavigationIntent = (
+                self._navigation_phase
+                if self._navigation_phase != "STOP"
+                else "FINAL_APPROACH"
+            )
+            self.last_model_response = (
+                "preview selector declined; committed to the lower-centre "
+                f"point of view {view_index}"
+            )
+            self.last_waypoint_raw_response = self.last_model_response
+            self.last_waypoint_model_intent = intent
+            self.last_waypoint_applied_intent = intent
+            self.last_waypoint_model_action_mode = "EXECUTION"
+            self.last_waypoint_applied_action_mode = "EXECUTION"
+            self.last_waypoint_evidence = (
+                selection.evidence if selection is not None else "no selection"
+            )
+            self.last_waypoint_confidence = (
+                selection.confidence if selection is not None else 0.0
+            )
+            self.last_waypoint_guard_reason = (
+                self.last_preview_guard_reason
+                or "preview selection below confidence threshold; "
+                "committed to the lower-centre point of the chosen view"
+            )
+            self.last_waypoint_stop_disposition = None
+            self.last_requested_turn_deg = None
+            self.last_requested_normalized = (500, 750)
+            self.last_requested_pixel = (
+                self._scale_normalized(500, image.shape[1]),
+                self._scale_normalized(750, image.shape[0]),
             )
         timings["select_pixel_ms"] = (
             time.perf_counter() - select_started
         ) * 1000
-        # With previews and turns both refused above, the only outcome left is
-        # a waypoint inside the chosen view.
         requested_uv = self.last_requested_pixel
-        if requested_uv is None:
-            # A STOP or malformed selection in this pass leaves no pixel;
-            # the conventional lower-centre stand-in keeps the episode
-            # alive instead of killing the whole rank with an assertion
-            # (observed once in 200 episodes, in act_on_preview).
-            requested_uv = (image.shape[1] // 2, int(image.shape[0] * 0.75))
+        assert requested_uv is not None
 
         depth_m = self.actor.depth_in_meters(
             view.depth,
@@ -696,7 +619,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 ),
                 action_mode=self._applied_action_mode(),
             )
-        self._maybe_lock_doorway_waypoint(
+        self._maybe_lock_landmark_waypoint(
             point,
             camera_to_world=view.camera_to_world,
         )
@@ -783,7 +706,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 current_before_analysis = (
                     self.task_memory.get_current_subgoal()
                 )
-                doorway_distance = self._doorway_target_distance(
+                doorway_distance = self._landmark_target_distance(
                     current_before_analysis,
                     camera_to_world=camera_to_world,
                 )
@@ -853,7 +776,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # longer exists.
         if self.task_memory is not None and self.task_memory.is_task_complete():
             self.last_model_response = "all subgoals complete"
-            # This returns before ``_select_pixel`` clears the per-step waypoint
+            # This returns before any decision resets the per-step waypoint
             # state, so set the mode here rather than reporting the previous
             # step's value alongside a terminal decision.
             self.last_waypoint_applied_action_mode = "EXECUTION"
@@ -868,12 +791,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             if self.task_memory is not None
             else None
         )
-        self._release_doorway_waypoint_for_motion(
+        # The judge may just have advanced the stage; every decision below
+        # steers by the stage that is active now.
+        self._sync_navigation_phase(current)
+        self._release_landmark_waypoint_for_motion(
             current,
             camera_to_world=camera_to_world,
         )
         self._stage_overrun_reorient(current)
-        locked = self._locked_doorway_decision(
+        locked = self._locked_landmark_decision(
             current,
             camera_to_world=camera_to_world,
         )
@@ -907,6 +833,14 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 action_mode="PREVIEW",
             )
 
+        turn = self._turn_stage_decision(current)
+        if turn is not None:
+            timings["depth_ms"] = 0.0
+            timings["select_pixel_ms"] = 0.0
+            timings["waypoint_ms"] = 0.0
+            self._record_timings(timings, started)
+            return turn
+
         depth_started = time.perf_counter()
         depth_m = self.actor.depth_in_meters(
             depth,
@@ -925,61 +859,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             intrinsics=intrinsics,
             camera_to_world=camera_to_world,
         )
+        timings["select_pixel_ms"] = (time.perf_counter() - som_started) * 1000
         if som is not None:
-            timings["select_pixel_ms"] = (time.perf_counter() - som_started) * 1000
             timings["waypoint_ms"] = 0.0
             self._record_timings(timings, started)
             return som
-
-        # Read Task Memory only after Temporal Memory has published this
-        # step's analysis, so waypoint selection steers by the subgoal this
-        # step established rather than the previous step's.
-        select_started = time.perf_counter()
-        selected = self._select_pixel(
-            image,
-            instruction,
-            subgoal_context=(
-                self.task_memory.current_subgoal_context()
-                if self.task_memory is not None
-                else ""
-            ),
-            depth_m=depth_m,
-        )
-        timings["select_pixel_ms"] = (
-            time.perf_counter() - select_started
-        ) * 1000
-        selected = self._steer_to_visible_landmark(
-            selected,
-            current,
-            width=image.shape[1],
-            height=image.shape[0],
-        )
-        if selected.action_mode == "PREVIEW":
-            # PREVIEW carries no action by design: the controller renders the
-            # surrounding views and calls back, so this is not a stop.
-            self._record_timings(timings, started)
-            return NavigationDecision(
-                stop=False,
-                raw_response=self.last_model_response,
-                action_mode="PREVIEW",
-            )
-        if selected.stop:
-            self._record_timings(timings, started)
-            return NavigationDecision(
-                stop=True,
-                raw_response=self.last_model_response,
-                action_mode="EXECUTION",
-            )
-        if selected.is_turn:
-            # An in-place turn never reaches the RGB-D layer: there is no pixel
-            # to snap and no point to back-project.
-            self._record_timings(timings, started)
-            return NavigationDecision(
-                stop=False,
-                raw_response=self.last_model_response,
-                action_mode=self._applied_action_mode(),
-                turn_deg=selected.turn_deg,
-            )
+        # No marker was chosen: set-of-mark is off, no candidate was
+        # reachable, or the reply was unusable twice. Walk to the nearest
+        # unexplored boundary, else straight ahead, and decide again on the
+        # next observation.
         frontier = self._spatial_frontier_decision(
             current,
             image_shape=image.shape[:2],
@@ -988,22 +876,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             timings["waypoint_ms"] = 0.0
             self._record_timings(timings, started)
             return frontier
-        requested_uv = self.last_requested_pixel
-        if requested_uv is None:
-            # A STOP or malformed selection in this pass leaves no pixel;
-            # the conventional lower-centre stand-in keeps the episode
-            # alive instead of killing the whole rank with an assertion
-            # (observed once in 200 episodes, in act_on_preview).
-            requested_uv = (image.shape[1] // 2, int(image.shape[0] * 0.75))
         waypoint_started = time.perf_counter()
-        point = self.actor.waypoint_from_pixel(
-            requested_uv,
-            depth_m,
-            intrinsics,
-            camera_to_world,
-        )
-        self._maybe_lock_doorway_waypoint(
-            point,
+        point = self._straight_ahead_point(
+            image.shape[:2],
+            depth_m=depth_m,
+            intrinsics=intrinsics,
             camera_to_world=camera_to_world,
         )
         self._commit_spatial_target(point, camera_to_world=camera_to_world)
@@ -1013,79 +890,95 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             stop=False,
             point=point,
             raw_response=self.last_model_response,
-            action_mode=self._applied_action_mode(),
+            action_mode="EXECUTION",
         )
 
-    def _steer_to_visible_landmark(
+    def _turn_stage_decision(
         self,
-        selected: _WaypointOutput,
         current: Optional[Subgoal],
-        *,
-        width: int,
-        height: int,
-    ) -> _WaypointOutput:
-        """Walk toward a landmark the Captioner has already located.
+    ) -> Optional[NavigationDecision]:
+        """Rotate in place through a turn stage; measurement ends it.
 
-        The waypoint model reliably asks to TURN or PREVIEW when the doorway
-        sits off-centre in the image, even though its prompt tells it to
-        steer to the floor beneath a visible landmark. When the Captioner
-        reported that landmark in this same image, the geometry is already
-        known: the requested pixel becomes the landmark's own position, and
-        the RGB-D layer snaps it down to the floor in front of it. A waypoint
-        or STOP the model produced itself is left alone.
+        A single image cannot show how far the camera has already turned, so
+        the turn is not asked of a model at all: one turn primitive per step
+        until ``_update_navigation_progress`` measures enough rotation, or
+        the Captioner reports the stage's landmark centred, and switches the
+        phase to the stage's movement part.
         """
-        if selected.stop or (
-            selected.action_mode != "PREVIEW" and not selected.is_turn
+        if current is None or self._navigation_phase not in (
+            "TURN_LEFT", "TURN_RIGHT"
         ):
-            return selected
-        landmark = self.last_landmark
-        if (
-            current is None
-            or landmark is None
-            or self._landmark_subgoal_id != current.subgoal_id
-            or not landmark.visible
-            or landmark.u is None
-            or landmark.v is None
-            or landmark.confidence < LANDMARK_STEER_MIN_CONFIDENCE
-        ):
-            return selected
+            return None
+        turn_deg = (
+            MAX_TURN_DEG if self._navigation_phase == "TURN_RIGHT"
+            else -MAX_TURN_DEG
+        )
+        self.last_model_response = (
+            f"measured turn stage: rotating {turn_deg:+d} deg"
+        )
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = self._navigation_phase
+        self.last_waypoint_applied_intent = self._navigation_phase
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_confidence = 1.0
+        self.last_waypoint_evidence = (
+            "turn stage: {:.0f} deg turned so far".format(
+                self._turn_progress_deg(current)
+            )
+        )
+        self.last_waypoint_guard_reason = (
+            "turn stage is driven by measured rotation; skipped the model"
+        )
+        self.last_waypoint_stop_disposition = None
+        self.last_requested_turn_deg = turn_deg
+        self.last_requested_pixel = None
+        self.last_requested_normalized = None
+        return NavigationDecision(
+            stop=False,
+            raw_response=self.last_model_response,
+            action_mode="EXECUTION",
+            turn_deg=turn_deg,
+        )
+
+    def _straight_ahead_point(
+        self,
+        image_shape: tuple[int, int],
+        *,
+        depth_m: np.ndarray,
+        intrinsics: Any,
+        camera_to_world: Any,
+    ) -> NavigationPoint:
+        """The conventional lower-centre floor point: walk on, look again."""
+        height, width = image_shape
         intent: NavigationIntent = (
             self._navigation_phase
             if self._navigation_phase != "STOP"
             else "APPROACH_LANDMARK"
         )
-        asked = "PREVIEW" if selected.action_mode == "PREVIEW" else "TURN"
-        evidence = (
-            "steered to the floor beneath the Captioner-localized landmark "
-            f"at ({landmark.u},{landmark.v}) instead of the model's {asked}: "
-            f"{landmark.evidence}"
-        )
-        override = _WaypointOutput(
-            stop=False,
-            intent=intent,
-            action_mode="EXECUTION",
-            u=landmark.u,
-            v=landmark.v,
-            confidence=landmark.confidence,
-            evidence=evidence,
-        )
-        self.last_waypoint_guard_reason = (
-            f"overrode model {asked}: landmark is localized in the current "
-            "image"
-        )
+        why = self.last_som_error or "set-of-mark produced no choice"
+        self.last_model_response = f"walking straight ahead: {why}"
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = intent
         self.last_waypoint_applied_intent = intent
+        self.last_waypoint_model_action_mode = "EXECUTION"
         self.last_waypoint_applied_action_mode = "EXECUTION"
-        self.last_waypoint_evidence = evidence
-        self.last_waypoint_confidence = landmark.confidence
+        self.last_waypoint_confidence = 0.0
+        self.last_waypoint_evidence = "safe lower-centre waypoint"
+        self.last_waypoint_guard_reason = f"walked straight ahead: {why}"
+        self.last_waypoint_stop_disposition = None
         self.last_requested_turn_deg = None
-        self.last_requested_normalized = (landmark.u, landmark.v)
+        self.last_requested_normalized = (500, 750)
         self.last_requested_pixel = (
-            self._scale_normalized(landmark.u, width),
-            self._scale_normalized(landmark.v, height),
+            self._scale_normalized(500, width),
+            self._scale_normalized(750, height),
         )
-        self._force_forward_this_step = False
-        self._force_left_turn_this_step = False
-        return override
+        return self.actor.waypoint_from_pixel(
+            self.last_requested_pixel,
+            depth_m,
+            intrinsics,
+            camera_to_world,
+        )
 
     @staticmethod
     def _doorway_subgoal(subgoal: Optional[Subgoal]) -> bool:
@@ -1097,7 +990,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
         )
 
-    def _maybe_lock_doorway_waypoint(
+    def _maybe_lock_landmark_waypoint(
         self,
         point: NavigationPoint,
         *,
@@ -1108,15 +1001,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             if self.task_memory is not None
             else None
         )
-        # A deferred STOP answered with the safe lower-centre filler pixel
-        # carries the model's arrival confidence but none of its
-        # localization; there is nothing to lock. A deferred STOP steered
-        # to the located target is a localized point and locks normally.
-        if (
-            self.last_waypoint_stop_disposition is not None
-            and self.last_requested_normalized == (500, 750)
-        ):
-            return
         evidence = self.last_waypoint_evidence or ""
         # The model's confidence is advisory (see protocol.py): a doorway
         # named in the evidence, a Captioner-located landmark or a
@@ -1133,13 +1017,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # A landmark the Captioner located for an approach stage is committed
         # to the same way as a doorway: it is the point whose arrival decides
         # the stage, and the judge defers completion until it is reached.
-        # The final stage is excluded because a reused point would bypass the
-        # waypoint model that proposes STOP.
         landmark_target = bool(
             current is not None
-            and not self._is_final_subgoal(current)
             and self._navigation_phase
-            in ("APPROACH_LANDMARK", "TURN_LEFT", "TURN_RIGHT")
+            in ("APPROACH_LANDMARK", "FINAL_APPROACH", "TURN_LEFT", "TURN_RIGHT")
             and re.search(
                 r"overrode model|beneath the located landmark",
                 self.last_waypoint_guard_reason or "",
@@ -1154,7 +1035,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # in the wrong direction, repeated until the agent hit a wall.
         preview_target = bool(
             current is not None
-            and not self._is_final_subgoal(current)
             and "Captioner-selected preview heading"
             in (self.last_waypoint_guard_reason or "")
         )
@@ -1176,21 +1056,21 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # world point. The existing target is released only by measured
         # stagnation or by advancing to another subgoal.
         if (
-            self._doorway_waypoint is not None
-            and self._doorway_waypoint_subgoal_id == current.subgoal_id
+            self._landmark_waypoint is not None
+            and self._landmark_waypoint_subgoal_id == current.subgoal_id
         ):
             return
-        self._doorway_waypoint = point
-        self._doorway_waypoint_subgoal_id = current.subgoal_id
-        self._doorway_waypoint_bearing_history.clear()
+        self._landmark_waypoint = point
+        self._landmark_waypoint_subgoal_id = current.subgoal_id
+        self._landmark_waypoint_bearing_history.clear()
         distance_m = self._planar_waypoint_distance(
             point,
             camera_to_world=camera_to_world,
         )
-        self._doorway_waypoint_best_distance_m = distance_m
-        self._doorway_waypoint_stagnant_steps = 0
+        self._landmark_waypoint_best_distance_m = distance_m
+        self._landmark_waypoint_stagnant_steps = 0
         # The point's error grows with the range it was localized from.
-        self._doorway_waypoint_reach_tolerance_m = float(
+        self._landmark_waypoint_reach_tolerance_m = float(
             np.clip(
                 COMMITTED_TARGET_TOLERANCE_FRACTION * distance_m,
                 COMMITTED_TARGET_REACHED_M,
@@ -1198,7 +1078,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
         )
 
-    def _clear_doorway_waypoint(self, *, keep_for_judge: bool = False) -> None:
+    def _clear_landmark_waypoint(self, *, keep_for_judge: bool = False) -> None:
         """Drop the committed point; optionally keep it as judge evidence.
 
         A point released because the follower looped is no longer steered
@@ -1207,22 +1087,22 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         A point released for stagnation was probably wrong and is dropped
         outright.
         """
-        if keep_for_judge and self._doorway_waypoint is not None:
-            self._judge_target_point = self._doorway_waypoint
-            self._judge_target_subgoal_id = self._doorway_waypoint_subgoal_id
+        if keep_for_judge and self._landmark_waypoint is not None:
+            self._judge_target_point = self._landmark_waypoint
+            self._judge_target_subgoal_id = self._landmark_waypoint_subgoal_id
             self._judge_target_tolerance_m = (
-                self._doorway_waypoint_reach_tolerance_m
+                self._landmark_waypoint_reach_tolerance_m
             )
         else:
             self._judge_target_point = None
             self._judge_target_subgoal_id = None
             self._judge_target_tolerance_m = COMMITTED_TARGET_REACHED_M
-        self._doorway_waypoint = None
-        self._doorway_waypoint_subgoal_id = None
-        self._doorway_waypoint_best_distance_m = None
-        self._doorway_waypoint_stagnant_steps = 0
-        self._doorway_waypoint_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
-        self._doorway_waypoint_bearing_history.clear()
+        self._landmark_waypoint = None
+        self._landmark_waypoint_subgoal_id = None
+        self._landmark_waypoint_best_distance_m = None
+        self._landmark_waypoint_stagnant_steps = 0
+        self._landmark_waypoint_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
+        self._landmark_waypoint_bearing_history.clear()
 
     def _elevation_progress_m(
         self,
@@ -1237,7 +1117,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self._subgoal_start_y = y
         return y - self._subgoal_start_y
 
-    def _release_doorway_waypoint_for_motion(
+    def _release_landmark_waypoint_for_motion(
         self,
         current: Optional[Subgoal],
         *,
@@ -1250,15 +1130,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         then consumes the same grounded mode and emits its deterministic
         recovery action during this step.
         """
-        if self._doorway_target_distance(
+        if self._landmark_target_distance(
             current,
             camera_to_world=camera_to_world,
         ) is None:
             return
-        if self._doorway_waypoint is not None:
-            self._doorway_waypoint_bearing_history.append(
+        if self._landmark_waypoint is not None:
+            self._landmark_waypoint_bearing_history.append(
                 self._waypoint_bearing_deg(
-                    self._doorway_waypoint,
+                    self._landmark_waypoint,
                     camera_to_world=camera_to_world,
                 )
             )
@@ -1277,10 +1157,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # still holds only turns.
         if (
             mode == "IN_PLACE_SPIN"
-            and self._doorway_waypoint is not None
+            and self._landmark_waypoint is not None
             and any(
                 abs(bearing) > LOCKED_TARGET_TURN_TOLERANCE_DEG
-                for bearing in self._doorway_waypoint_bearing_history
+                for bearing in self._landmark_waypoint_bearing_history
             )
         ):
             self.last_error_guard_reason = (
@@ -1288,7 +1168,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 "aligning with the off-axis target"
             )
             return
-        self._clear_doorway_waypoint(keep_for_judge=True)
+        self._clear_landmark_waypoint(keep_for_judge=True)
         self.last_error_candidate = mode
         self.last_error_guard_reason = (
             f"released locked doorway waypoint: {reason}"
@@ -1347,15 +1227,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             return False
         return float(np.dot(offset, forward_xz)) < 0.0
 
-    def _doorway_target_distance(
+    def _landmark_target_distance(
         self,
         current: Optional[Subgoal],
         *,
         camera_to_world: Any,
     ) -> Optional[float]:
         current_id = current.subgoal_id if current is not None else None
-        point = self._doorway_waypoint
-        if point is None or current_id != self._doorway_waypoint_subgoal_id:
+        point = self._landmark_waypoint
+        if point is None or current_id != self._landmark_waypoint_subgoal_id:
             point = self._judge_target_point
             if point is None or current_id != self._judge_target_subgoal_id:
                 # Third source: the spatial memory's model-located landmark
@@ -1394,10 +1274,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     def _judge_target_tolerance(self, current: Optional[Subgoal]) -> float:
         current_id = current.subgoal_id if current is not None else None
         if (
-            self._doorway_waypoint is not None
-            and current_id == self._doorway_waypoint_subgoal_id
+            self._landmark_waypoint is not None
+            and current_id == self._landmark_waypoint_subgoal_id
         ):
-            return self._doorway_waypoint_reach_tolerance_m
+            return self._landmark_waypoint_reach_tolerance_m
         if (
             self._judge_target_point is not None
             and current_id == self._judge_target_subgoal_id
@@ -1408,17 +1288,17 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             return float(landmark_target.tolerance_m)
         return COMMITTED_TARGET_REACHED_M
 
-    def _locked_doorway_decision(
+    def _locked_landmark_decision(
         self,
         current: Optional[Subgoal],
         *,
         camera_to_world: Any,
     ) -> Optional[NavigationDecision]:
-        point = self._doorway_waypoint
+        point = self._landmark_waypoint
         current_id = current.subgoal_id if current is not None else None
-        if point is None or current_id != self._doorway_waypoint_subgoal_id:
+        if point is None or current_id != self._landmark_waypoint_subgoal_id:
             if point is not None:
-                self._clear_doorway_waypoint()
+                self._clear_landmark_waypoint()
             return None
         distance_m = self._planar_waypoint_distance(
             point,
@@ -1428,21 +1308,21 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         # to the policy, but keeps the target as completion evidence until
         # Task Memory advances.
         if distance_m <= max(
-            0.35, self._doorway_waypoint_reach_tolerance_m
+            0.35, self._landmark_waypoint_reach_tolerance_m
         ) or self._waypoint_passed(point, camera_to_world=camera_to_world):
             # Hand over for good: a point left armed re-engages as soon as
             # the policy's next step carries the camera past the tolerance
             # again, and drags the agent back to a target it already met.
-            self._clear_doorway_waypoint(keep_for_judge=True)
+            self._clear_landmark_waypoint(keep_for_judge=True)
             return None
-        best = self._doorway_waypoint_best_distance_m
+        best = self._landmark_waypoint_best_distance_m
         if best is None or distance_m < best - 0.10:
-            self._doorway_waypoint_best_distance_m = distance_m
-            self._doorway_waypoint_stagnant_steps = 0
+            self._landmark_waypoint_best_distance_m = distance_m
+            self._landmark_waypoint_stagnant_steps = 0
         else:
-            self._doorway_waypoint_stagnant_steps += 1
-        if self._doorway_waypoint_stagnant_steps >= 16:
-            self._clear_doorway_waypoint()
+            self._landmark_waypoint_stagnant_steps += 1
+        if self._landmark_waypoint_stagnant_steps >= 16:
+            self._clear_landmark_waypoint()
             return None
         intent: NavigationIntent = (
             self._navigation_phase
@@ -1536,15 +1416,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             return False
 
     def _spatial_stage_eligible(self, current: Optional[Subgoal]) -> bool:
-        """Stages that walk to a point: not turns, not the final approach.
+        """Stages that walk to a point: everything but a turn.
 
-        The final stage keeps the waypoint model in the loop every step so
-        its STOP proposals are not skipped; a turn stage is a rotation.
+        The final stage is included: its arrival is judged by the completion
+        judge against the committed target, not proposed by a model.
         """
         return bool(
             current is not None
-            and self._navigation_phase in ("FOLLOW_CORRIDOR", "APPROACH_LANDMARK")
-            and not self._is_final_subgoal(current)
+            and self._navigation_phase
+            in ("FOLLOW_CORRIDOR", "APPROACH_LANDMARK", "FINAL_APPROACH")
         )
 
     def _register_spatial_landmark(
@@ -1623,7 +1503,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._overrun_fired_at_m = self._subgoal_walked_m
         self._force_preview_this_step = True
         self._overrun_count += 1
-        self._clear_doorway_waypoint()
+        self._clear_landmark_waypoint()
         if self.use_spatial_memory and self.spatial_memory.target is not None:
             self.spatial_memory.release_target("stage overrun")
         self.last_error_guard_reason = (
@@ -1784,10 +1664,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self.last_som_image = None
         if not self.use_som or not self._spatial_stage_eligible(current):
             return None
-        # The same recovery evaluation the pixel path runs; an active
-        # recovery takes the deterministic path and must not be voted twice.
-        if self._recovery_mode_for_step() is not None:
-            return None
         located = self._located_landmark_decision(
             current,
             image_shape=image.shape[:2],
@@ -1921,7 +1797,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                     self.last_waypoint_stop_disposition = "som stop vote"
                     self.last_waypoint_model_action_mode = "EXECUTION"
                     self.last_waypoint_applied_action_mode = "EXECUTION"
-                    self._final_stop_evidence.append(True)
                     return NavigationDecision(
                         stop=True,
                         raw_response=response_text,
@@ -1945,13 +1820,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             self.last_som_error = self.last_som_error or "reply was not a listed label"
             return None
         self.last_som_choice = chosen.label
-        self.last_recovery_mode = None
         self.last_waypoint_model_action_mode = "EXECUTION"
         self.last_waypoint_applied_action_mode = "EXECUTION"
         self.last_waypoint_model_intent = self._navigation_phase
         self.last_waypoint_applied_intent = self._navigation_phase
         self.last_waypoint_stop_disposition = None
-        self._final_stop_evidence.append(False)
         if chosen.kind == "turn" and chosen.world_xyz is None:
             return None
         # Walk to the chosen point: a marker, or the unexplored area behind
@@ -2006,12 +1879,13 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         camera_to_world: Any,
     ) -> Optional[NavigationDecision]:
         """Walk to the Captioner-located landmark and lock it as the stage's
-        committed point, exactly as the pixel path does through
-        ``_steer_to_visible_landmark`` and ``_maybe_lock_doorway_waypoint``.
+        committed point (``_maybe_lock_landmark_waypoint``).
 
         Subgoal completion for doorway and landmark stages is judged on
         arrival at that committed point, so a set-of-mark choice must not
-        bypass it when the landmark is in view.
+        bypass it when the landmark is in view. On the final stage the agent
+        holds at the located target instead of choosing another marker, so
+        the judge can finish the task where the destination is.
         """
         landmark = self.last_landmark
         pixel = self.last_landmark_pixel
@@ -2026,7 +1900,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if self.actor.camera_height_m is not None and not point.on_floor:
             return None
         if self._planar_waypoint_distance(point, camera_to_world=camera_to_world) < 0.4:
-            return None  # already beside it; the judge finishes the stage
+            if not self._is_final_subgoal(current):
+                return None  # already beside it; the judge finishes the stage
+            return self._hold_at_final_target(point, landmark)
         committed = self.spatial_memory.commit_target(
             point.world_xyz,
             kind="landmark",
@@ -2059,11 +1935,9 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             "walking to the floor beneath the located landmark"
         )
         self.last_waypoint_stop_disposition = None
-        self.last_recovery_mode = None
-        self._final_stop_evidence.append(False)
         # Lock the navmesh-snapped point so the completion judge measures
         # arrival against the same target the follower is given.
-        self._maybe_lock_doorway_waypoint(
+        self._maybe_lock_landmark_waypoint(
             replace(point, world_xyz=committed.world_xyz, on_floor=True),
             camera_to_world=camera_to_world,
         )
@@ -2078,6 +1952,38 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         )
         return decision
 
+    def _hold_at_final_target(
+        self,
+        point: NavigationPoint,
+        landmark: _LandmarkOutput,
+    ) -> NavigationDecision:
+        """Stay beside the located destination while the judge decides."""
+        self.last_model_response = "holding at the located final target"
+        self.last_waypoint_raw_response = self.last_model_response
+        self.last_waypoint_model_intent = "FINAL_APPROACH"
+        self.last_waypoint_applied_intent = "FINAL_APPROACH"
+        self.last_waypoint_model_action_mode = "EXECUTION"
+        self.last_waypoint_applied_action_mode = "EXECUTION"
+        self.last_waypoint_confidence = float(landmark.confidence)
+        self.last_waypoint_evidence = (
+            "beside the Captioner-localized final target: "
+            f"{landmark.evidence}"
+        )
+        self.last_waypoint_guard_reason = (
+            "holding beside the located final target; waiting for the "
+            "completion judge"
+        )
+        self.last_waypoint_stop_disposition = None
+        self.last_requested_turn_deg = None
+        self.last_requested_pixel = self.last_landmark_pixel
+        self.last_requested_normalized = self.last_landmark_normalized or (500, 750)
+        return NavigationDecision(
+            stop=False,
+            point=point,
+            raw_response=self.last_model_response,
+            action_mode="EXECUTION",
+        )
+
     def _spatial_frontier_decision(
         self,
         current: Optional[Subgoal],
@@ -2086,15 +1992,10 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     ) -> Optional[NavigationDecision]:
         """Walk to the nearest unexplored boundary instead of straight ahead.
 
-        Only when the model could not decide and the policy fell back to the
-        lower-centre "walk straight" pixel: a refused second PREVIEW or an
-        invalid reply. A frontier is a place the map has not seen, which is
-        where the route continuation has to be.
+        Only when set-of-mark produced no choice. A frontier is a place the
+        map has not seen, which is where the route continuation has to be.
         """
-        reason = self.last_waypoint_guard_reason or ""
         if not self.use_spatial_memory:
-            return None
-        if not re.search(r"safe waypoint instead|safe fallback", reason):
             return None
         if not self._spatial_stage_eligible(current):
             return None
@@ -2119,7 +2020,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         decision = self._spatial_target_decision(current, image_shape=image_shape)
         if decision is not None:
             self.last_waypoint_guard_reason = (
-                f"{reason}; redirected to a Spatial Memory frontier"
+                "no set-of-mark choice ({}); redirected to a Spatial Memory "
+                "frontier".format(self.last_som_error or "none produced")
             )
         return decision
 
@@ -2139,17 +2041,15 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         if not self.use_spatial_memory or not self._spatial_stage_eligible(current):
             return
         if (
-            self._doorway_waypoint is not None
-            and self._doorway_waypoint_subgoal_id == current.subgoal_id
+            self._landmark_waypoint is not None
+            and self._landmark_waypoint_subgoal_id == current.subgoal_id
         ):
             return  # the doorway lock owns this stage's target
         if self.actor.camera_height_m is not None and not point.on_floor:
             return
         # A recovery waypoint is re-evaluated every step by design; holding
         # it would freeze the agent on the first escape direction it tried.
-        if self.last_recovery_mode is not None or re.search(
-            r"recovery", self.last_waypoint_guard_reason or "", flags=re.IGNORECASE
-        ):
+        if self.last_recovery_mode is not None:
             return
         distance = self._planar_waypoint_distance(
             point, camera_to_world=camera_to_world
@@ -2189,8 +2089,8 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             key=lambda index: abs(views[index].yaw_deg),
         )
         self.last_preview_selection = None
-        # Kept apart from ``last_waypoint_guard_reason``: ``_select_pixel``
-        # clears that one on entry, and these are different guards anyway.
+        # Kept apart from ``last_waypoint_guard_reason``: they are different
+        # guards.
         self.last_preview_guard_reason = None
         if not isinstance(self.temporal_memory, TemporalMemory):
             self.last_preview_guard_reason = (
@@ -2257,22 +2157,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         self._previous_yaw_deg = yaw_deg
         return translation_m, yaw_delta_deg
 
-    def _update_preview_progress(self) -> None:
-        """Re-arm PREVIEW only after net displacement from its anchor."""
-        if (
-            not self._preview_requires_progress
-            or self._preview_anchor_position_xz is None
-            or self._previous_position is None
-        ):
-            return
-        displacement = float(np.linalg.norm(
-            self._previous_position[[0, 2]] - self._preview_anchor_position_xz
-        ))
-        if displacement < PREVIEW_REARM_TRANSLATION_M:
-            return
-        self._preview_requires_progress = False
-        self._preview_anchor_position_xz = None
-
     def _is_final_subgoal(self, subgoal: Optional[Subgoal]) -> bool:
         return bool(
             subgoal is not None
@@ -2314,14 +2198,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
         subgoal_id = subgoal.subgoal_id if subgoal is not None else None
         if subgoal_id != self._navigation_subgoal_id:
             self._navigation_subgoal_id = subgoal_id
-            # A new stage can introduce a new turn or landmark at the same
-            # physical position, so an earlier stage's preview must not block
-            # it from looking around.
-            self._preview_requires_progress = False
-            self._preview_anchor_position_xz = None
-            self._final_stop_evidence.clear()
-            self._corridor_forward_streak = 0
-            self._corridor_heading_yaw_deg = None
             self._subgoal_net_yaw_deg = 0.0
             self._subgoal_walked_m = 0.0
             self._overrun_fired_at_m = 0.0
@@ -2365,10 +2241,7 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             )
         ):
             return
-        if not self._turn_follow_phase_started:
-            self._turn_follow_phase_started = True
-            self._corridor_forward_streak = 0
-            self._corridor_heading_yaw_deg = None
+        self._turn_follow_phase_started = True
         self._navigation_phase = self._post_turn_phase(subgoal)
 
     def _landmark_centred_for_current_subgoal(
@@ -2427,59 +2300,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
             # may approach with STOP on the table.
             return "APPROACH_LANDMARK"
         return phase
-
-    def _update_corridor_lock(
-        self,
-        *,
-        translation_m: float,
-        yaw_delta_deg: float,
-    ) -> None:
-        if self._navigation_phase != "FOLLOW_CORRIDOR":
-            self._corridor_forward_streak = 0
-            return
-        if (
-            translation_m >= 0.10
-            and abs(yaw_delta_deg) < TURN_EVIDENCE_DEG
-        ):
-            self._corridor_forward_streak += 1
-        elif self._corridor_heading_yaw_deg is None:
-            self._corridor_forward_streak = 0
-        if (
-            self._corridor_heading_yaw_deg is None
-            and self._corridor_forward_streak
-            >= CORRIDOR_LOCK_FORWARD_STEPS
-            and self._previous_yaw_deg is not None
-        ):
-            self._corridor_heading_yaw_deg = self._previous_yaw_deg
-
-    def _next_subgoal(
-        self,
-        current: Optional[Subgoal],
-    ) -> Optional[Subgoal]:
-        if current is None:
-            return None
-        for index, item in enumerate(self.subgoals):
-            if item.subgoal_id == current.subgoal_id:
-                next_index = index + 1
-                return (
-                    self.subgoals[next_index]
-                    if next_index < len(self.subgoals)
-                    else None
-                )
-        return None
-
-    def _landmark_is_near_for_current_subgoal(
-        self,
-        current: Optional[Subgoal],
-    ) -> bool:
-        return bool(
-            current is not None
-            and self.last_landmark is not None
-            and self._landmark_subgoal_id == current.subgoal_id
-            and self.last_landmark.visible
-            and self.last_landmark.proximity in ("NEAR", "AT")
-            and self.last_landmark.confidence >= LANDMARK_STEER_MIN_CONFIDENCE
-        )
 
     def _record_behavior(
         self,
@@ -2565,7 +2385,6 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
                 temperature=0.0 if attempt == 0 else 0.7,
             )
             response_text = str(response)
-            self.last_subgoal_response = response_text
             try:
                 subgoals = parse_subgoal_plan(
                     response_text,
@@ -2628,22 +2447,11 @@ class VLNAgent(LandmarkTrackerMixin, WaypointPolicyMixin):
     def _rgb_to_png(self, rgb: np.ndarray) -> bytes:
         return self.actor.rgb_to_png(rgb)
 
-    def _as_rgb_array(self, rgb: Any) -> np.ndarray:
-        return self.actor.as_rgb_array(rgb)
-
     def _extract_json_object(self, response: str) -> dict[str, Any]:
         return self.actor.extract_json_object(response)
 
 
 __all__ = (
-    "CameraIntrinsics",
-    "DEFAULT_MODEL_PATH",
-    "TemporalMemory",
-    "NavigationDecision",
-    "NavigationPoint",
-    "POINT_PROMPT",
     "PreviewView",
-    "Subgoal",
-    "SUBGOAL_PROMPT",
     "VLNAgent",
 )

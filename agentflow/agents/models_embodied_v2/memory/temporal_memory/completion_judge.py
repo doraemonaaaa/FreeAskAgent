@@ -78,12 +78,12 @@ class CompletionMemoryMixin:
         self._last_completion_frame_ids: tuple[int, ...] = ()
         self._last_completion_guard: Optional[str] = None
         self._doorway_approach_seen = False
-        self._doorway_target_distance_m: Optional[float] = None
+        self._landmark_target_distance_m: Optional[float] = None
         self._subgoal_net_yaw_deg = 0.0
         self._measured_crossings: list[float] = []
         self._doorway_crossed_streak = 0
-        self._doorway_reached = False
-        self._doorway_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
+        self._landmark_reached = False
+        self._landmark_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
         self._committed_target_seen = False
         self._turn_progress_deg = 0.0
         self._elevation_history: Deque[float] = deque(maxlen=3)
@@ -140,12 +140,12 @@ class CompletionMemoryMixin:
             self._latest_scene = None
         if hasattr(self, "_doorway_approach_seen"):
             self._doorway_approach_seen = False
-        if hasattr(self, "_doorway_target_distance_m"):
-            self._doorway_target_distance_m = None
+        if hasattr(self, "_landmark_target_distance_m"):
+            self._landmark_target_distance_m = None
         if hasattr(self, "_doorway_crossed_streak"):
             self._doorway_crossed_streak = 0
-            self._doorway_reached = False
-            self._doorway_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
+            self._landmark_reached = False
+            self._landmark_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
             self._committed_target_seen = False
             self._turn_progress_deg = 0.0
             self._elevation_history.clear()
@@ -171,10 +171,10 @@ class CompletionMemoryMixin:
             self._measured_crossings = []
             self._latest_scene = None
             self._doorway_approach_seen = False
-            self._doorway_target_distance_m = None
+            self._landmark_target_distance_m = None
             self._doorway_crossed_streak = 0
-            self._doorway_reached = False
-            self._doorway_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
+            self._landmark_reached = False
+            self._landmark_reach_tolerance_m = COMMITTED_TARGET_REACHED_M
             self._committed_target_seen = False
             self._turn_progress_deg = 0.0
             self._elevation_history.clear()
@@ -217,10 +217,6 @@ class CompletionMemoryMixin:
             return
         if selection is not None:
             self.set_preview_selection(selection)
-
-    def preview_views(self) -> tuple[Any, ...]:
-        """Return the views held for this step, empty when none were taken."""
-        return self._preview_views
 
     def set_preview_selection(self, selection: PreviewSelection) -> None:
         """Record which held view the actor should act on.
@@ -274,16 +270,7 @@ class CompletionMemoryMixin:
         self._pending_translation_m = float(translation_m)
         self._pending_yaw_delta_deg = float(yaw_delta_deg)
 
-    def set_landmark_evidence(
-        self,
-        landmark: _LandmarkOutput,
-    ) -> None:
-        """Attach a validated landmark judgement to the next observation."""
-        if not isinstance(landmark, _LandmarkOutput):
-            raise TypeError("landmark must be a validated _LandmarkOutput")
-        self._pending_landmark = landmark
-
-    def set_doorway_target_distance(
+    def set_landmark_target_distance(
         self,
         distance_m: Optional[float],
         *,
@@ -299,19 +286,17 @@ class CompletionMemoryMixin:
         while the camera is still on its way there.
         """
         if distance_m is None:
-            self._doorway_target_distance_m = None
+            self._landmark_target_distance_m = None
             return
         value = float(distance_m)
         if value < 0.0:
             raise ValueError("doorway target distance must not be negative")
-        self._doorway_target_distance_m = value
+        self._landmark_target_distance_m = value
         self._committed_target_seen = True
         if reach_tolerance_m is not None:
-            self._doorway_reach_tolerance_m = max(
+            self._landmark_reach_tolerance_m = max(
                 COMMITTED_TARGET_REACHED_M, float(reach_tolerance_m)
             )
-
-    set_committed_target_distance = set_doorway_target_distance
 
     def set_doorway_crossing(self, crossed: bool) -> None:
         """Record a map-measured doorway crossing confirmed this step.
@@ -441,15 +426,6 @@ class CompletionMemoryMixin:
         self._pending_landmark = self._unknown_landmark("tracker not run")
         return annotated
 
-    @staticmethod
-    def _landmark_signature(frame: MemoryFrame) -> tuple[Any, ...]:
-        return (
-            frame.landmark_visible,
-            frame.landmark_direction,
-            frame.landmark_proximity,
-            frame.landmark_passed,
-        )
-
     def _select_completion_frames(self) -> tuple[MemoryFrame, ...]:
         """Return the already bounded active-subgoal evidence window."""
         return tuple(self._frames)
@@ -510,9 +486,9 @@ class CompletionMemoryMixin:
                 crossing_note,
                 (
                     "; committed target still {:.1f} m ahead".format(
-                        self._doorway_target_distance_m
+                        self._landmark_target_distance_m
                     )
-                    if self._doorway_target_distance_m is not None
+                    if self._landmark_target_distance_m is not None
                     else ""
                 ),
             )
@@ -536,10 +512,10 @@ class CompletionMemoryMixin:
             else None
         )
         self._last_landmark_range_m = landmark_range
-        doorway_distance = self._doorway_target_distance_m
-        reach_tolerance = self._doorway_reach_tolerance_m
+        doorway_distance = self._landmark_target_distance_m
+        reach_tolerance = self._landmark_reach_tolerance_m
         if doorway_distance is not None and doorway_distance <= reach_tolerance:
-            self._doorway_reached = True
+            self._landmark_reached = True
         # The model located its landmark in this very image; the depth map
         # says how far away that pixel is. A crossing or an arrival claimed
         # while it is still metres ahead is contradicted by measurement.
@@ -549,7 +525,7 @@ class CompletionMemoryMixin:
         landmark_far = bool(
             landmark_range is not None
             and landmark_range > LANDMARK_RANGE_VETO_M
-            and not self._doorway_reached
+            and not self._landmark_reached
         )
 
         # The model's own ``completed`` flag is not required here: it
@@ -576,7 +552,7 @@ class CompletionMemoryMixin:
         committed_target_ahead = bool(
             doorway_distance is not None
             and doorway_distance > reach_tolerance
-            and not self._doorway_reached
+            and not self._landmark_reached
         )
         final_confirmed = bool(
             is_final
@@ -610,19 +586,19 @@ class CompletionMemoryMixin:
         # ``completed``; the measured guards below decide whether to accept it.
         completed = bool(scene.completed)
         reached_model_doorway = bool(
-            self._doorway_reached
+            self._landmark_reached
             or (doorway_distance is not None and doorway_distance <= 0.35)
         )
         target_still_ahead = bool(
             doorway_distance is not None
             and doorway_distance > reach_tolerance
-            and not self._doorway_reached
+            and not self._landmark_reached
         )
         # Arriving at the point the actor committed to for a plain landmark
         # stage is the stage's endpoint; doorway and final stages keep their
         # own crossing and stop protocols.
         landmark_arrival = bool(
-            self._doorway_reached
+            self._landmark_reached
             and self._committed_target_seen
             and not is_doorway
             and not is_final
@@ -962,8 +938,8 @@ class CompletionMemoryMixin:
                 "error_window_size": min(len(self._frames), 8),
                 "error_detection_enabled": True,
                 "completion_guard": self._last_completion_guard,
-                "doorway_target_distance_m": (
-                    self._doorway_target_distance_m
+                "landmark_target_distance_m": (
+                    self._landmark_target_distance_m
                 ),
                 "final_target_at_streak": self._final_target_at_streak,
                 "stop_proposed_last_step": self._stop_proposed_last_step,
@@ -973,9 +949,9 @@ class CompletionMemoryMixin:
                 "task_path_length_m": self._task_path_length_m,
                 "stage_skip": self._last_stage_skip,
                 "doorway_crossed_streak": self._doorway_crossed_streak,
-                "doorway_reached": self._doorway_reached,
+                "landmark_reached": self._landmark_reached,
                 "turn_progress_deg": self._turn_progress_deg,
-                "doorway_reach_tolerance_m": self._doorway_reach_tolerance_m,
+                "landmark_reach_tolerance_m": self._landmark_reach_tolerance_m,
                 "elevation_rise_m": (
                     self._elevation_history[-1]
                     if self._elevation_history

@@ -174,12 +174,6 @@ class OccupancyGrid:
         state[occ] = OCCUPIED
         return state
 
-    def state_at(self, x: float, z: float) -> int:
-        row, col = self.world_to_cell(x, z)
-        if not self.inside(row, col):
-            return UNKNOWN
-        return int(self.state_map()[row, col])
-
     def explored_area_m2(self) -> float:
         state = self.state_map()
         return float(np.count_nonzero(state != UNKNOWN)) * self.resolution_m ** 2

@@ -127,7 +127,7 @@ def test_measured_crossing_is_ignored_while_committed_target_is_ahead():
     memory = TemporalMemory(captioner=_uncooperative_captioner(), task_memory=_doorway_task())
     for index in range(3):
         memory.set_motion_evidence(translation_m=0.6, yaw_delta_deg=0.0)
-        memory.set_doorway_target_distance(3.0)
+        memory.set_landmark_target_distance(3.0)
         memory.set_doorway_crossing(index == 2)
         memory.append_observation(_frame(index))
         result = memory.analyze()
@@ -286,13 +286,13 @@ def test_located_landmark_arrival_reaches_the_judge():
         reason="located landmark", tolerance_m=0.5, max_age_steps=50,
         stagnation_steps=50,
     )
-    distance = agent._doorway_target_distance(current, camera_to_world=pose)
+    distance = agent._landmark_target_distance(current, camera_to_world=pose)
     assert distance is not None and 1.5 < distance < 2.5
     # Walk onto the point: the reported distance shrinks below tolerance.
     for z in (-0.7, -1.4, -1.9):
         pose = pose.copy(); pose[2, 3] = z
         agent.act(np.zeros((24, 32, 3), np.uint8), np.full((24, 32), 2.0, np.float32),
                   instruction, intrinsics, pose)
-    d2 = agent._doorway_target_distance(current, camera_to_world=pose)
+    d2 = agent._landmark_target_distance(current, camera_to_world=pose)
     assert d2 is None or d2 <= 0.6  # reached (target may already be released as "reached")
 

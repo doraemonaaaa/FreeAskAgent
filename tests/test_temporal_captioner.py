@@ -443,9 +443,9 @@ def test_scene_prompts_describe_value_types_instead_of_placeholder_values():
         DOOR_SCENE_SYSTEM_PROMPT,
         SCENE_SYSTEM_PROMPT,
     )
-    from agentflow.agents.models_embodied_v2.skiils.protocol import POINT_PROMPT
+    from agentflow.agents.models_embodied_v2.skiils.protocol import SOM_PROMPT
 
-    for prompt in (SCENE_SYSTEM_PROMPT, DOOR_SCENE_SYSTEM_PROMPT, POINT_PROMPT):
+    for prompt in (SCENE_SYSTEM_PROMPT, DOOR_SCENE_SYSTEM_PROMPT, SOM_PROMPT):
         # A literal 0.0 or 500/750 in the schema line was copied verbatim by
         # Qwen3-VL-8B on every step of a full run.
         assert '"confidence":0.0' not in prompt

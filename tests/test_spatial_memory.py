@@ -23,6 +23,14 @@ CAMERA_HEIGHT = 1.25
 INTRINSICS = CameraIntrinsics(fx=40.0, fy=40.0, cx=64.0, cy=48.0)
 
 
+def _state_at(grid, x, z):
+    """Occupancy state of the cell containing world point (x, z)."""
+    row, col = grid.world_to_cell(x, z)
+    if not grid.inside(row, col):
+        return UNKNOWN
+    return int(grid.state_map()[row, col])
+
+
 def _pose(x: float, z: float, yaw_deg: float = 0.0) -> np.ndarray:
     """Habitat-style camera_to_world: y up, camera looks along -z at yaw 0."""
     yaw = math.radians(yaw_deg)
@@ -55,9 +63,9 @@ def test_floor_becomes_free_and_wall_becomes_occupied():
         grid.update(_room_depth(wall_m=3.0), INTRINSICS, pose)
     # Floor 1.5 m ahead (z = -1.5) is free; the wall face at z = -3 is occupied;
     # far behind the camera nothing was ever seen.
-    assert grid.state_at(0.0, -1.5) == FREE
-    assert grid.state_at(0.0, -3.0) == OCCUPIED
-    assert grid.state_at(0.0, 4.0) == UNKNOWN
+    assert _state_at(grid, 0.0, -1.5) == FREE
+    assert _state_at(grid, 0.0, -3.0) == OCCUPIED
+    assert _state_at(grid, 0.0, 4.0) == UNKNOWN
     assert grid.explored_area_m2() > 2.0
 
 
@@ -74,7 +82,7 @@ def test_plan_routes_around_a_known_obstacle():
     # The route swings right (positive x) to pass the gap instead of crossing
     # the painted wall.
     assert max(xs) > 0.6
-    assert all(grid.state_at(x, z) != OCCUPIED for x, z in path)
+    assert all(_state_at(grid, x, z) != OCCUPIED for x, z in path)
 
 
 def test_frontiers_lie_at_the_edge_of_what_was_seen():
@@ -213,7 +221,7 @@ def test_committed_target_snaps_off_the_wall_clearance_band():
     # A point 0.15 m in front of the wall is inside the clearance band.
     target = memory.commit_target((0.0, 0.0, -2.85), kind="som", subgoal_id="1")
     assert target.world_xyz[2] > -2.85 + 0.15
-    assert grid.state_at(target.world_xyz[0], target.world_xyz[2]) == FREE
+    assert _state_at(grid, target.world_xyz[0], target.world_xyz[2]) == FREE
     assert grid.snap_to_clear_free(0.0, -2.85) is not None
     assert grid.snap_to_clear_free(0.0, 20.0) is None  # nothing known there
 

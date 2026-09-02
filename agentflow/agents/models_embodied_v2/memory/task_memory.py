@@ -60,27 +60,14 @@ class TaskMemory:
             return None
         return self.latest_input.observation
 
-    def get_task(self) -> str:
-        return self.goal
-
     def get_reset_generation(self) -> int:
         """Return a monotonically increasing episode-reset version."""
         return self._reset_generation
-
-    def get_task_guidance(self) -> str:
-        return self.task_guidance
 
     def get_current_subgoal(self) -> Optional[Any]:
         if self._current_subgoal_index >= len(self._subgoals):
             return None
         return self._subgoals[self._current_subgoal_index]
-
-    def get_next_subgoal(self) -> Optional[Any]:
-        """Return the stage after the active one without advancing state."""
-        index = self._current_subgoal_index + 1
-        if index >= len(self._subgoals):
-            return None
-        return self._subgoals[index]
 
     def get_final_subgoal(self) -> Optional[Any]:
         """Return the last stage of the installed plan, if any."""
@@ -186,36 +173,12 @@ class TaskMemory:
 
         self.record_event(kind, str(value))
 
-    def has_next_subgoal(self) -> bool:
-        return self._current_subgoal_index < len(self._subgoals) - 1
-
-    def force_advance(self, reason: str) -> bool:
-        """Advance past a stalled subgoal (stage watchdog).
-
-        Never advances past the final subgoal: completing that one is the
-        episode's stop condition and stays with the judge.
-        """
-        current = self.get_current_subgoal()
-        if current is None or not self.has_next_subgoal():
-            return False
-        self.subgoal_completion_status = (
-            f"Subgoal {current.subgoal_id}: COMPLETE (forced: {reason})")
-        self.record_event("SUBGOAL_FORCED", self.subgoal_completion_status)
-        self._current_subgoal_index += 1
-        return True
-
     def record_input(self, observation: Any) -> None:
         self.latest_input = TaskInput(
             observation=observation,
             goal=self.goal,
         )
         self.observation_count += 1
-
-    def update_subgoal_status(self, status: str) -> None:
-        self.subgoal_completion_status = str(status or "")
-
-    def update_temporal_status(self, status: str) -> None:
-        self.temporal_status = str(status or "")
 
     def record_event(self, event: str, content: str) -> None:
         self.events.append(f"{event}: {content}")
@@ -247,27 +210,6 @@ class TaskMemory:
                 current.description,
                 current.completion_criteria,
             )
-        )
-
-    def context(self) -> str:
-        current = self.get_current_subgoal()
-        current_text = (
-            "None (all subgoals complete)"
-            if current is None
-            else (
-                f"{current.subgoal_id}: {current.description} "
-                f"(proof: {current.completion_criteria})"
-            )
-        )
-        recent = list(self.events) or ["None"]
-        return (
-            f"Goal: {self.goal}\n"
-            f"Observation: {self._observation_reference()}\n"
-            f"Current subgoal: {current_text}\n"
-            f"Subgoal status: "
-            f"{self.subgoal_completion_status or 'Not analyzed'}\n"
-            f"Temporal status: {self.temporal_status or 'No error'}\n"
-            f"Recent events: {recent}"
         )
 
     def diagnostics(self) -> dict[str, Any]:

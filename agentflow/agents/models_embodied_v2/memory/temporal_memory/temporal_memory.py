@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict, replace
-from typing import Any, Deque, Optional, Sequence
+from dataclasses import asdict
+from typing import Any, Deque, Optional
 
 from .temporal_captioner import (
     CaptionResult,
-    ErrorMode,
     Subgoal,
     TemporalAnalysisRequest,
-    TemporalCaptioner,
     TemporalFrameInput,
 )
 from .interfaces import TaskMemoryPort, TemporalCaptionerPort
@@ -61,11 +59,6 @@ class _BaseTemporalMemory:
         self.reset()
 
     @property
-    def current_subgoal(self) -> Optional[Subgoal]:
-        self._sync_task_state()
-        return self._subgoal
-
-    @property
     def latest_result(self) -> Optional[CaptionResult]:
         self._sync_task_state()
         return self._latest_result
@@ -87,21 +80,6 @@ class _BaseTemporalMemory:
         self._task_reset_generation = (
             self.task_memory.get_reset_generation()
         )
-
-    def reset_episode(
-        self,
-        *,
-        goal: str,
-        task_guidance: str = "",
-        subgoals: Sequence[Any] = (),
-    ) -> None:
-        """Reset Task and Temporal Memory together for one new episode."""
-        self.task_memory.reset(
-            goal=goal,
-            task_guidance=task_guidance,
-            subgoals=subgoals,
-        )
-        self.reset()
 
     def get_latest_observation(self) -> Any:
         """Read the latest RGB observation from Task Memory."""
@@ -207,12 +185,6 @@ class _BaseTemporalMemory:
         self._sync_task_state()
         return tuple(self._frames)
 
-    def drain_events(self) -> tuple[TemporalEvent, ...]:
-        self._sync_task_state()
-        events = tuple(self._events)
-        self._events.clear()
-        return events
-
     def context(self) -> str:
         self._sync_task_state()
         return (
@@ -262,103 +234,9 @@ class _BaseTemporalMemory:
 
         return store(self, result)
 
-    def _detect_error_mode(self) -> ErrorMode:
-        """Detect cumulative errors from the visual sequence only."""
-        count = len(self._frames)
-        # Cumulative motion errors need a short sequence to be visible at all;
-        # one or two frames carry no evidence of oscillation or lack of progress.
-        if count < self.config.min_error_detection_frames:
-            return "NONE"
-        signatures = [_visual_signature(frame.image) for frame in self._frames]
-        adjacent = [
-            _visual_distance(signatures[index - 1], signatures[index])
-            for index in range(1, count)
-        ]
-        lag_two = [
-            _visual_distance(signatures[index - 2], signatures[index])
-            for index in range(2, count)
-        ]
-        moving_threshold = max(
-            self.config.stationary_threshold * 2,
-            0.04,
-        )
-
-        if (
-            sum(value >= moving_threshold for value in adjacent)
-            >= _required_count(4, 7, len(adjacent))
-            and sum(
-                value <= self.config.stationary_threshold
-                for value in lag_two
-            )
-            >= _required_count(4, 6, len(lag_two))
-        ):
-            return "TURN_OSCILLATION"
-
-        revisited_view = any(
-            later - earlier >= 3
-            and _visual_distance(signatures[earlier], signatures[later])
-            <= self.config.revisit_threshold
-            for earlier in range(count)
-            for later in range(earlier + 1, count)
-        )
-        if (
-            sum(value >= moving_threshold for value in adjacent)
-            >= _required_count(5, 7, len(adjacent))
-            and revisited_view
-        ):
-            return "IN_PLACE_SPIN"
-
-        stationary_transitions = sum(
-            distance <= self.config.stationary_threshold
-            for distance in adjacent
-        )
-        if stationary_transitions >= _required_count(5, 7, len(adjacent)):
-            return "GET_NOWHERE"
-        return "NONE"
-
     def _publish(self, event: TemporalEvent) -> None:
         self._events.append(event)
         self.task_memory.publish_temporal_event(event)
-
-
-def _required_count(numerator: int, denominator: int, total: int) -> int:
-    """Scale a full-window evidence threshold to a partial window.
-
-    The full eight-frame window keeps its original absolute thresholds; a
-    shorter window requires the same proportion of supporting transitions.
-    """
-    return max(1, -(-numerator * total // denominator))
-
-
-def _visual_signature(image: Any) -> Any:
-    """Return a tiny grayscale frame used only for rule-based comparisons."""
-    import io
-
-    import numpy as np
-    from PIL import Image
-
-    if isinstance(image, bytes):
-        pil = Image.open(io.BytesIO(image))
-    elif isinstance(image, Image.Image):
-        pil = image
-    else:
-        array = np.asarray(image)
-        if array.dtype != np.uint8:
-            if np.issubdtype(array.dtype, np.floating) and array.size:
-                if float(np.nanmax(array)) <= 1:
-                    array = array * 255
-            array = np.clip(array, 0, 255).astype(np.uint8)
-        pil = Image.fromarray(array)
-    return np.asarray(
-        pil.convert("L").resize((32, 32)),
-        dtype=np.float32,
-    ) / 255.0
-
-
-def _visual_distance(first: Any, second: Any) -> float:
-    import numpy as np
-
-    return float(np.mean(np.abs(first - second)))
 
 
 from .completion_judge import CompletionMemoryMixin

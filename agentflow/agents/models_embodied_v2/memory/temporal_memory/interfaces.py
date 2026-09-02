@@ -25,8 +25,6 @@ class TaskMemoryPort(Protocol):
 
     def get_current_subgoal(self) -> Optional[Subgoal]: ...
 
-    def get_next_subgoal(self) -> Optional[Subgoal]: ...
-
     def is_current_subgoal_final(self) -> bool: ...
 
     def get_latest_observation(self) -> Any: ...
@@ -41,12 +39,3 @@ class TemporalCaptionerPort(Protocol):
         self,
         request: SceneAnalysisRequest,
     ) -> SceneAnalysisResult: ...
-
-
-class PreviewSelectorPort(Protocol):
-    def select(
-        self,
-        *,
-        subgoal: Optional[Subgoal],
-        views: Sequence[Any],
-    ) -> Any: ...

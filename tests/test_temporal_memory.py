@@ -15,7 +15,6 @@ from agentflow.agents.models_embodied_v2 import (
 )
 from agentflow.agents.models_embodied_v2.memory import (
     TaskMemory,
-    TemporalEventKind,
     TemporalMemory,
     TemporalMemoryConfig,
     TemporalStateError,
@@ -200,14 +199,9 @@ def test_each_analysis_publishes_only_completion_event():
     _push(memory)
     memory.analyze()
 
-    events = memory.drain_events()
-    assert [event.kind for event in events] == [
-        TemporalEventKind.SUBGOAL_COMPLETED,
-    ]
-    assert events[0].value is False
-    assert list(task.temporal_events) == [
-        event.to_dict() for event in events
-    ]
+    events = list(task.temporal_events)
+    assert [event["kind"] for event in events] == ["SUBGOAL_COMPLETED"]
+    assert events[0]["value"] is False
     assert task.temporal_status == ""
 
 
@@ -237,10 +231,10 @@ def test_enabled_error_is_published_without_local_rule_override():
 
     assert result.error is True
     assert result.error_mode == "IN_PLACE_SPIN"
-    events = memory.drain_events()
-    assert [event.kind for event in events] == [
-        TemporalEventKind.ERROR,
-        TemporalEventKind.SUBGOAL_COMPLETED,
+    events = list(task.temporal_events)
+    assert [event["kind"] for event in events] == [
+        "ERROR",
+        "SUBGOAL_COMPLETED",
     ]
     assert task.temporal_status == "ERROR=True; mode=IN_PLACE_SPIN"
 
@@ -298,7 +292,7 @@ def test_task_reset_automatically_resets_temporal_memory():
     )
     assert task.get_reset_generation() == old_generation + 1
     assert memory.recent_frames() == ()
-    assert memory.current_subgoal.description == "Find the stairs"
+    assert task.get_current_subgoal().description == "Find the stairs"
 
     new_image = _frame(99)
     task.record_input(new_image)
@@ -307,31 +301,9 @@ def test_task_reset_automatically_resets_temporal_memory():
     frames = memory.recent_frames()
     assert [frame.frame_id for frame in frames] == [1]
     assert np.array_equal(frames[0].image, new_image)
-    assert memory.current_subgoal.description == "Find the stairs"
+    assert task.get_current_subgoal().description == "Find the stairs"
     assert memory.latest_result is None
-    assert memory.drain_events() == ()
-
-
-def test_reset_episode_resets_both_memories_in_one_call():
-    memory, _, task = _memory(_result())
-    task.record_input(_frame(0))
-    memory.update_from_task_memory()
-    old_generation = task.get_reset_generation()
-
-    memory.reset_episode(
-        goal="Navigate to the kitchen.",
-        task_guidance="Look for kitchen counters.",
-        subgoals=(
-            Subgoal("1", "Enter the kitchen", "Kitchen counters are nearby."),
-        ),
-    )
-
-    assert task.get_reset_generation() == old_generation + 1
-    assert task.get_task() == "Navigate to the kitchen."
-    assert task.observation_count == 0
-    assert memory.recent_frames() == ()
-    assert memory.current_subgoal.description == "Enter the kitchen"
-    assert memory.latest_result is None
+    assert list(task.temporal_events) == []
 
 
 def test_manual_reset_clears_temporal_state():
@@ -341,7 +313,6 @@ def test_manual_reset_clears_temporal_state():
 
     assert memory.recent_frames() == ()
     assert memory.latest_result is None
-    assert memory.drain_events() == ()
     assert memory.diagnostics()["frame_ids"] == []
 
 
@@ -352,7 +323,6 @@ def test_model_failure_keeps_window_and_emits_no_event():
     assert memory.analyze_if_ready() is None
     assert len(memory.recent_frames()) == 8
     assert "model unavailable" in memory.last_analysis_error
-    assert memory.drain_events() == ()
     assert list(task.temporal_events) == []
 
 
@@ -525,16 +495,16 @@ def test_model_crossing_is_accepted_at_model_localized_doorway():
     )
     memory = TemporalMemory(captioner=captioner, task_memory=task)
 
-    memory.set_doorway_target_distance(0.80)
+    memory.set_landmark_target_distance(0.80)
     memory.append_observation(_frame(0))
     assert memory.analyze().completed is False
-    memory.set_doorway_target_distance(0.30)
+    memory.set_landmark_target_distance(0.30)
     memory.append_observation(_frame(1))
     result = memory.analyze()
 
     assert result.completed is True
     assert task.get_current_subgoal().subgoal_id == "2"
-    assert memory.diagnostics()["doorway_target_distance_m"] is None
+    assert memory.diagnostics()["landmark_target_distance_m"] is None
 
 
 def test_final_subgoal_requires_two_stable_model_owned_at_observations():
@@ -684,14 +654,14 @@ def test_far_localized_doorway_blocks_crossing_claims_until_reached():
     memory = TemporalMemory(captioner=captioner, task_memory=task)
 
     for index, distance in enumerate((2.4, 2.0, 1.6, 1.2, 1.1)):
-        memory.set_doorway_target_distance(distance)
+        memory.set_landmark_target_distance(distance)
         memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
         memory.append_observation(_frame(index))
         assert memory.analyze().completed is False
         assert "still" in memory.diagnostics()["completion_guard"]
     assert task.get_current_subgoal().subgoal_id == "1"
 
-    memory.set_doorway_target_distance(0.45)
+    memory.set_landmark_target_distance(0.45)
     memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
     memory.append_observation(_frame(5))
     assert memory.analyze().completed is True
@@ -720,13 +690,13 @@ def test_reached_doorway_is_latched_for_later_crossing_claims():
     # camera passes through the doorway point and walks 1.5 m beyond it
     # before the model first reports the crossing.
     for index, distance in enumerate((None, 0.40, 0.90)):
-        memory.set_doorway_target_distance(distance)
+        memory.set_landmark_target_distance(distance)
         memory.set_motion_evidence(translation_m=0.5, yaw_delta_deg=0.0)
         memory.append_observation(_frame(index))
         assert memory.analyze().completed is False
-    assert memory.diagnostics()["doorway_reached"] is True
+    assert memory.diagnostics()["landmark_reached"] is True
 
-    memory.set_doorway_target_distance(1.50)
+    memory.set_landmark_target_distance(1.50)
     memory.set_motion_evidence(translation_m=0.5, yaw_delta_deg=0.0)
     memory.append_observation(_frame(3))
     result = memory.analyze()
@@ -784,13 +754,13 @@ def test_non_doorway_completion_is_deferred_while_committed_target_is_ahead():
     memory.append_observation(_frame(0))
     memory.analyze()  # binds the subgoal; no target yet
 
-    memory.set_committed_target_distance(0.82)
+    memory.set_landmark_target_distance(0.82)
     memory.append_observation(_frame(1))
     assert memory.analyze().completed is False
     assert "committed waypoint is still 0.82 m ahead" in memory.diagnostics()["completion_guard"]
     assert task.get_current_subgoal().subgoal_id == "1"
 
-    memory.set_committed_target_distance(0.30)
+    memory.set_landmark_target_distance(0.30)
     memory.append_observation(_frame(2))
     assert memory.analyze().completed is True
     assert task.get_current_subgoal().subgoal_id == "2"
@@ -860,10 +830,10 @@ def test_landmark_stage_completes_on_arrival_at_committed_point():
 
     # Localized from 3.2 m away: tolerance 0.8 m.
     for index, distance in enumerate((3.2, 2.4, 1.6, 1.0), start=1):
-        memory.set_committed_target_distance(distance, reach_tolerance_m=0.8)
+        memory.set_landmark_target_distance(distance, reach_tolerance_m=0.8)
         memory.append_observation(_frame(index))
         assert memory.analyze().completed is False
-    memory.set_committed_target_distance(0.7, reach_tolerance_m=0.8)
+    memory.set_landmark_target_distance(0.7, reach_tolerance_m=0.8)
     memory.append_observation(_frame(5))
     assert memory.analyze().completed is True
     assert task.get_current_subgoal().subgoal_id == "2"
@@ -1076,7 +1046,7 @@ def test_range_veto_is_lifted_once_committed_point_was_reached():
     memory.analyze()
     memory.set_depth_observation(np.full((24, 32), 3.0, dtype=np.float32))
     # Landmark far, but the camera passed the committed doorway point.
-    memory.set_committed_target_distance(0.3)
+    memory.set_landmark_target_distance(0.3)
     memory.set_motion_evidence(translation_m=0.4, yaw_delta_deg=0.0)
     memory.append_observation(_frame(1))
     assert memory.analyze().completed is True

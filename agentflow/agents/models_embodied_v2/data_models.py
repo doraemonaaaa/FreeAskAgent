@@ -401,25 +401,6 @@ class CaptionResult:
 
 
 @dataclass(frozen=True, slots=True)
-class DualWindowCaptionResult:
-    """Fused judgement from independent completion and error windows."""
-
-    subgoal_id: str
-    completed: bool
-    error: bool
-    error_mode: ErrorMode
-    completion_window_size: int
-    error_window_size: int
-    completion_raw_response: str
-    error_raw_response: str
-    completion_latency_ms: float
-    error_latency_ms: float
-    latency_ms: float
-    error_confidence: float = 0.0
-    error_evidence: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class TemporalCaptionerConfig:
     max_tokens: int = 48
     max_image_edge: int = 224
@@ -491,20 +472,11 @@ class TemporalEvent:
 @dataclass(frozen=True, slots=True)
 class TemporalMemoryConfig:
     window_size: int = 8
-    stationary_threshold: float = 0.02
-    revisit_threshold: float = 0.05
-    min_error_detection_frames: int = 4
     enable_error_detection: bool = False
 
     def __post_init__(self) -> None:
         if self.window_size != 8:
             raise ValueError("Temporal Memory uses a fixed eight-frame window")
-        if not 0 < self.stationary_threshold < self.revisit_threshold < 1:
-            raise ValueError("visual thresholds must satisfy 0 < stationary < revisit < 1")
-        if not 3 <= self.min_error_detection_frames <= self.window_size:
-            raise ValueError(
-                "min_error_detection_frames must be between 3 and window_size"
-            )
         if not isinstance(self.enable_error_detection, bool):
             raise TypeError("enable_error_detection must be a boolean")
 
